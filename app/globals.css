@@ -357,6 +357,7 @@ p {
 }
 
 .button-primary:disabled,
+.button-secondary:disabled,
 .add-step-button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -540,6 +541,266 @@ p {
   text-align: right;
 }
 
+.test-lab {
+  margin-bottom: 22px;
+  padding: 15px;
+  border: 1px solid #d7dad4;
+  border-radius: 12px;
+  background: #f8f8f5;
+}
+
+.test-lab-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.test-lab-heading .eyebrow {
+  margin-bottom: 3px;
+}
+
+.test-lab-heading h4 {
+  margin-bottom: 5px;
+  font-size: 15px;
+}
+
+.test-lab-heading p {
+  max-width: 440px;
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.test-lab-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 7px;
+}
+
+.test-lab-actions button {
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.test-explanation {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 24px minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 13px;
+  padding-top: 12px;
+  border-top: 1px solid #e1e2dd;
+}
+
+.test-explanation > span {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: white;
+  color: var(--green);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.test-explanation p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.test-explanation strong {
+  color: #46524c;
+}
+
+.test-running,
+.wiring-result,
+.agent-test-running,
+.agent-test-result {
+  margin-top: 13px;
+}
+
+.test-progress {
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e3e5df;
+}
+
+.test-progress > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--green);
+  transition: width 180ms ease;
+}
+
+.test-now {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 9px;
+  background: white;
+}
+
+.test-now > span {
+  grid-column: 1 / -1;
+  color: var(--green);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.test-now > strong {
+  font-size: 11px;
+}
+
+.test-now > i {
+  color: var(--green);
+  font-style: normal;
+}
+
+.test-now > p {
+  grid-column: 1 / -1;
+  margin: 1px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.wiring-result {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 9px;
+  padding: 10px;
+  border-radius: 9px;
+  background: var(--green-soft);
+  color: #285d42;
+}
+
+.wiring-result.is-failed {
+  background: var(--amber-soft);
+  color: #765026;
+}
+
+.wiring-result > span {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.7);
+  font-weight: 750;
+}
+
+.wiring-result strong {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 11px;
+}
+
+.wiring-result p {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.agent-test-running {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #cddbd2;
+  border-radius: 9px;
+  background: white;
+}
+
+.agent-test-running strong {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 11px;
+}
+
+.agent-test-running p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.agent-test-result {
+  overflow: hidden;
+  border: 1px solid #c9d9cf;
+  border-radius: 9px;
+  background: white;
+}
+
+.agent-test-result.is-risk,
+.agent-test-result.is-fail {
+  border-color: #e1c8a7;
+}
+
+.agent-test-result summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.agent-test-result summary > span {
+  padding: 4px 6px;
+  border-radius: 5px;
+  background: var(--green-soft);
+  color: var(--green);
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.agent-test-result.is-risk summary > span,
+.agent-test-result.is-fail summary > span {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.agent-test-result summary strong,
+.agent-test-result summary small {
+  display: block;
+}
+
+.agent-test-result summary strong {
+  margin-bottom: 2px;
+  font-size: 11px;
+}
+
+.agent-test-result summary small,
+.agent-test-result summary > i {
+  color: var(--muted);
+  font-size: 9px;
+  font-style: normal;
+}
+
+.agent-test-result pre {
+  max-height: 330px;
+  margin: 0;
+  overflow: auto;
+  padding: 13px;
+  border-top: 1px solid var(--line);
+  background: #fcfcfa;
+  color: #46514b;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
 .step-sequence {
   margin: 0;
   padding: 0;
@@ -560,6 +821,18 @@ p {
 .step-card.is-cycle-start {
   border-color: #87b49b;
   box-shadow: inset 3px 0 0 var(--green);
+}
+
+.step-card.is-test-source,
+.branch-state-card.is-test-source {
+  border-color: #d7a969;
+  box-shadow: 0 0 0 3px rgba(154, 100, 44, 0.12);
+}
+
+.step-card.is-test-target,
+.branch-state-card.is-test-target {
+  border-color: #4a9a6f;
+  box-shadow: 0 0 0 3px rgba(36, 114, 77, 0.14);
 }
 
 .step-number {
@@ -665,6 +938,18 @@ p {
   background: #f1f7f3;
 }
 
+.state-paths > button.is-testing {
+  position: relative;
+  z-index: 1;
+  box-shadow: inset 0 0 0 2px #d7a969;
+}
+
+.state-paths > button.was-tested > i::after {
+  content: "✓";
+  margin-left: 2px;
+  font-size: 8px;
+}
+
 .state-paths > button > i {
   display: grid;
   place-items: center;
@@ -736,6 +1021,15 @@ p {
   color: #3a694f;
 }
 
+.step-connector.is-testing span {
+  animation: test-hop 480ms ease-in-out infinite;
+  color: var(--amber);
+}
+
+@keyframes test-hop {
+  50% { transform: translateY(4px); }
+}
+
 .loop-back {
   display: flex;
   align-items: center;
@@ -755,6 +1049,11 @@ p {
 .loop-back p {
   margin: 3px 0 0;
   font-size: 12px;
+}
+
+.loop-back.is-testing {
+  border-color: #d7a969;
+  box-shadow: 0 0 0 3px rgba(154, 100, 44, 0.12);
 }
 
 .missing-loop-back {
@@ -1139,6 +1438,20 @@ p {
   .field-grid,
   .transition-edit-row {
     grid-template-columns: 1fr;
+  }
+
+  .test-lab-heading,
+  .test-lab-actions {
+    flex-direction: column;
+  }
+
+  .test-lab-actions,
+  .test-lab-actions button {
+    width: 100%;
+  }
+
+  .test-explanation {
+    grid-template-columns: 24px minmax(0, 1fr);
   }
 
   .branch-state-list {

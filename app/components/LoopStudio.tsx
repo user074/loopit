@@ -36,6 +36,23 @@ interface ChatMessage {
   source?: AgentName;
 }
 
+interface AgentTestResult {
+  verdict: "pass" | "risk" | "fail";
+  agent: AgentName;
+  loopRevision: number | null;
+  testedAt: string | null;
+  report: string;
+}
+
+interface WiringTestStep {
+  sourceId: string;
+  targetId: string;
+  transition: LoopTransition;
+  lane: "usual" | "repeat" | "edge";
+}
+
+type WiringTestStatus = "idle" | "running" | "passed" | "failed";
+
 const STATE_KIND_LABEL: Record<StateKind, string> = {
   observe: "Observe",
   decide: "Decide",
@@ -370,7 +387,15 @@ export function LoopStudio({
   const [selectedStateId, setSelectedStateId] = useState<string | null>(null);
   const [editing, setEditing] = useState<"overview" | string | null>(null);
   const [parseError, setParseError] = useState<string | null>(initialError);
+  const [wiringTestStatus, setWiringTestStatus] =
+    useState<WiringTestStatus>("idle");
+  const [wiringTestIndex, setWiringTestIndex] = useState(-1);
+  const [testedTransitionIds, setTestedTransitionIds] = useState<string[]>([]);
+  const [isAgentTesting, setIsAgentTesting] = useState(false);
+  const [agentTestActivity, setAgentTestActivity] = useState("Ready");
+  const [agentTest, setAgentTest] = useState<AgentTestResult | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const wiringTestRunRef = useRef(0);
 
   const sequence = useMemo(
     () => (loop ? primarySequence(loop) : null),
@@ -381,9 +406,11 @@ export function LoopStudio({
 
   const refresh = useCallback(async () => {
     try {
-      const [healthResponse, loopResponse] = await Promise.all([
+      const [healthResponse, loopResponse, conversationResponse, testResponse] = await Promise.all([
         fetch(`${DAEMON_URL}/api/health`),
         fetch(`${DAEMON_URL}/api/loop`),
+        fetch(`${DAEMON_URL}/api/conversation`),
+        fetch(`${DAEMON_URL}/api/test`),
       ]);
       if (healthResponse.ok) {
         const nextHealth = (await healthResponse.json()) as Health;
@@ -399,6 +426,18 @@ export function LoopStudio({
         setLoop(payload.loop);
         setParseError(null);
       }
+      if (conversationResponse.ok) {
+        const payload = (await conversationResponse.json()) as {
+          messages: ChatMessage[];
+        };
+        setMessages(payload.messages);
+      }
+      if (testResponse.ok) {
+        const payload = (await testResponse.json()) as {
+          result: AgentTestResult | null;
+        };
+        setAgentTest(payload.result);
+      }
     } catch {
       setActivity("Local bridge is offline");
     }
@@ -412,9 +451,24 @@ export function LoopStudio({
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, activity]);
 
+  useEffect(() => {
+    wiringTestRunRef.current += 1;
+    setWiringTestStatus("idle");
+    setWiringTestIndex(-1);
+    setTestedTransitionIds([]);
+  }, [loop?.revision]);
+
+  const rememberUiMessage = (role: "loopit" | "error", text: string) => {
+    void fetch(`${DAEMON_URL}/api/conversation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role, text }),
+    });
+  };
+
   const sendMessage = async (textOverride?: string, displayText?: string) => {
     const text = (textOverride ?? input).trim();
-    if (!text || isWorking) return;
+    if (!text || isWorking || isAgentTesting) return;
 
     const selectedAgent = health?.agents[agent];
     if (selectedAgent && !selectedAgent.installed) {
@@ -440,6 +494,7 @@ export function LoopStudio({
         body: JSON.stringify({
           agent,
           message: text,
+          displayText: displayText ?? text,
           selectedElementId: selectedStateId,
         }),
       });
@@ -513,7 +568,7 @@ export function LoopStudio({
     nextLoop: LoopDefinition,
     note: string,
   ): Promise<LoopDefinition | null> => {
-    if (isSaving || isWorking) return null;
+    if (isSaving || isWorking || isAgentTesting) return null;
     setIsSaving(true);
     try {
       const response = await fetch(`${DAEMON_URL}/api/loop`, {
@@ -526,13 +581,12 @@ export function LoopStudio({
       const saved = payload.loop as LoopDefinition;
       setLoop(saved);
       setEditing(null);
+      const message = `${note} Saved to loop.md; the agent will read revision ${saved.revision} on the next turn.`;
       setMessages((current) => [
         ...current,
-        newMessage(
-          "loopit",
-          `${note} Saved to loop.md; the agent will read revision ${saved.revision} on the next turn.`,
-        ),
+        newMessage("loopit", message),
       ]);
+      rememberUiMessage("loopit", message);
       return saved;
     } catch (error) {
       setMessages((current) => [
@@ -617,7 +671,8 @@ export function LoopStudio({
     await fetch(`${DAEMON_URL}/api/interrupt`, { method: "POST" }).catch(
       () => undefined,
     );
-    setActivity("Stopping agent");
+    if (isAgentTesting) setAgentTestActivity("Stopping rehearsal");
+    if (isWorking) setActivity("Stopping agent");
   };
 
   const otherTransitions =
@@ -634,6 +689,120 @@ export function LoopStudio({
     sequence?.states.map((state, index) => [state.id, index]) ?? [],
   );
   const stateById = new Map(loop?.states.map((state) => [state.id, state]) ?? []);
+
+  const wiringTestSteps: WiringTestStep[] = sequence
+    ? [
+        ...sequence.links.map((link) => ({ ...link, lane: "usual" as const })),
+        ...(sequence.loopBack
+          ? [{ ...sequence.loopBack, lane: "repeat" as const }]
+          : []),
+        ...otherTransitions.map(({ state, transition }) => ({
+          sourceId: state.id,
+          targetId: transition.to,
+          transition,
+          lane: "edge" as const,
+        })),
+      ]
+    : [];
+  const expectedTransitionCount =
+    loop?.states.reduce((total, state) => total + state.transitions.length, 0) ?? 0;
+  const currentWiringStep = wiringTestSteps[wiringTestIndex] ?? null;
+
+  const runWiringTest = async () => {
+    if (!loop || !sequence || wiringTestStatus === "running") return;
+    const runId = wiringTestRunRef.current + 1;
+    wiringTestRunRef.current = runId;
+    setWiringTestStatus("running");
+    setWiringTestIndex(-1);
+    setTestedTransitionIds([]);
+
+    for (let index = 0; index < wiringTestSteps.length; index += 1) {
+      if (wiringTestRunRef.current !== runId) return;
+      setWiringTestIndex(index);
+      await new Promise((resolve) => window.setTimeout(resolve, 480));
+      if (wiringTestRunRef.current !== runId) return;
+      setTestedTransitionIds((current) => [
+        ...current,
+        wiringTestSteps[index].transition.id,
+      ]);
+    }
+
+    setWiringTestIndex(-1);
+    const passed =
+      Boolean(sequence.loopBack) &&
+      blockingFindings.length === 0 &&
+      wiringTestSteps.length === expectedTransitionCount;
+    setWiringTestStatus(passed ? "passed" : "failed");
+
+    const summary = passed
+      ? `Quick wiring test passed for loop revision ${loop.revision}: the recurrence closed and all ${expectedTransitionCount} declared transitions were traced.`
+      : `Quick wiring test found a problem in loop revision ${loop.revision}. The loop did not close cleanly or not every declared transition could be traced.`;
+    setMessages((current) => [...current, newMessage("loopit", summary)]);
+    rememberUiMessage("loopit", summary);
+  };
+
+  const runAgentTest = async () => {
+    if (!loop || isWorking || isAgentTesting) return;
+    setIsAgentTesting(true);
+    setAgentTestActivity(
+      `Starting a fresh, read-only ${agent === "codex" ? "Codex" : "Claude"} rehearsal`,
+    );
+
+    try {
+      const response = await fetch(`${DAEMON_URL}/api/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent }),
+      });
+      if (!response.ok || !response.body) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || "The test agent did not start.");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const packets = buffer.split("\n\n");
+        buffer = packets.pop() ?? "";
+        for (const packet of packets) {
+          const dataLine = packet
+            .split("\n")
+            .find((line) => line.startsWith("data: "));
+          if (!dataLine) continue;
+          const event = JSON.parse(dataLine.slice(6));
+          if (event.type === "status" || event.type === "activity") {
+            setAgentTestActivity(event.text);
+          }
+          if (event.type === "test_report") {
+            setAgentTest(event.result as AgentTestResult);
+          }
+          if (event.type === "error") {
+            setMessages((current) => [
+              ...current,
+              newMessage("error", event.text),
+            ]);
+            setAgentTestActivity(event.text);
+          }
+          if (event.type === "done") {
+            setAgentTestActivity(event.interrupted ? "Rehearsal stopped" : "Ready");
+          }
+        }
+      }
+    } catch (error) {
+      const text =
+        error instanceof Error ? error.message : "The agent rehearsal failed.";
+      setMessages((current) => [...current, newMessage("error", text)]);
+      rememberUiMessage("error", text);
+      setAgentTestActivity("Rehearsal unavailable");
+    } finally {
+      setIsAgentTesting(false);
+      void refresh();
+    }
+  };
 
   const describeTarget = (transition: LoopTransition, sourceIndex?: number) => {
     const targetIndex = sequenceIndex.get(transition.to);
@@ -869,6 +1038,142 @@ export function LoopStudio({
                   </span>
                 </div>
 
+                <div className={`test-lab is-${wiringTestStatus}`}>
+                  <div className="test-lab-heading">
+                    <div>
+                      <span className="eyebrow">Preflight</span>
+                      <h4>Prove the loop before real work</h4>
+                      <p>
+                        First trace every declared transition. Then let a fresh,
+                        read-only agent challenge the state contracts and edge cases.
+                      </p>
+                    </div>
+                    <div className="test-lab-actions">
+                      <button
+                        className="button-secondary"
+                        disabled={
+                          wiringTestStatus === "running" ||
+                          isWorking ||
+                          isAgentTesting
+                        }
+                        onClick={() => void runWiringTest()}
+                        type="button"
+                      >
+                        {wiringTestStatus === "passed" || wiringTestStatus === "failed"
+                          ? "Trace again"
+                          : "Trace every path"}
+                      </button>
+                      {isAgentTesting ? (
+                        <button className="button-stop" onClick={interrupt} type="button">
+                          Stop rehearsal
+                        </button>
+                      ) : (
+                        <button
+                          className="button-primary"
+                          disabled={isWorking || wiringTestStatus === "running"}
+                          onClick={() => void runAgentTest()}
+                          type="button"
+                        >
+                          Test with {agent === "codex" ? "Codex" : "Claude"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {wiringTestStatus === "idle" && !isAgentTesting && (
+                    <div className="test-explanation">
+                      <span>1</span>
+                      <p><strong>Wiring test</strong> takes seconds and animates the recurrence, branches, interrupts, and completion exits.</p>
+                      <span>2</span>
+                      <p><strong>Agent rehearsal</strong> starts without chat history and writes a Markdown risk report without changing the project.</p>
+                    </div>
+                  )}
+
+                  {wiringTestStatus === "running" && currentWiringStep && (
+                    <div className="test-running">
+                      <div className="test-progress">
+                        <span
+                          style={{
+                            width: `${Math.round(
+                              ((wiringTestIndex + 1) / wiringTestSteps.length) * 100,
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                      <div className="test-now">
+                        <span>
+                          {currentWiringStep.lane === "repeat"
+                            ? "Recurrence"
+                            : currentWiringStep.lane === "edge"
+                              ? "Edge path"
+                              : "Usual path"}
+                        </span>
+                        <strong>{stateById.get(currentWiringStep.sourceId)?.name}</strong>
+                        <i aria-hidden="true">→</i>
+                        <strong>
+                          {stateById.get(currentWiringStep.targetId)?.name ??
+                            currentWiringStep.targetId}
+                        </strong>
+                        <p>{currentWiringStep.transition.when}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {(wiringTestStatus === "passed" || wiringTestStatus === "failed") && (
+                    <div className={`wiring-result is-${wiringTestStatus}`}>
+                      <span aria-hidden="true">
+                        {wiringTestStatus === "passed" ? "✓" : "!"}
+                      </span>
+                      <div>
+                        <strong>
+                          {wiringTestStatus === "passed"
+                            ? "The control flow closes"
+                            : "The control flow needs repair"}
+                        </strong>
+                        <p>
+                          {testedTransitionIds.length}/{expectedTransitionCount} transitions
+                          traced
+                          {sequence.loopBack
+                            ? ` · recurrence returns to ${stateById.get(sequence.loopBack.targetId)?.name}`
+                            : " · no recurrence found"}
+                          {blockingFindings.length
+                            ? ` · ${blockingFindings.length} blocking checks`
+                            : " · no structural blockers"}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {isAgentTesting && (
+                    <div className="agent-test-running">
+                      <span className="pulse-dot" />
+                      <div>
+                        <strong>Fresh-agent rehearsal</strong>
+                        <p>{agentTestActivity}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {agentTest && !isAgentTesting && (
+                    <details className={`agent-test-result is-${agentTest.verdict}`} open>
+                      <summary>
+                        <span>{agentTest.verdict.toUpperCase()}</span>
+                        <div>
+                          <strong>Fresh-agent rehearsal</strong>
+                          <small>
+                            Revision {agentTest.loopRevision ?? "?"}
+                            {agentTest.loopRevision !== loop.revision && " · out of date"}
+                            {agentTest.testedAt &&
+                              ` · ${new Date(agentTest.testedAt).toLocaleString()}`}
+                          </small>
+                        </div>
+                        <i>View report</i>
+                      </summary>
+                      <pre>{agentTest.report}</pre>
+                    </details>
+                  )}
+                </div>
+
                 <ol className="step-sequence">
                   {sequence.states.map((state, index) => {
                     const link = sequence.links.find((item) => item.sourceId === state.id);
@@ -877,9 +1182,13 @@ export function LoopStudio({
                       sequence.loopBack !== null &&
                       index < sequence.loopBack.targetIndex;
                     const hasChoice = state.transitions.length > 1;
+                    const isTestSource = currentWiringStep?.sourceId === state.id;
+                    const isTestTarget = currentWiringStep?.targetId === state.id;
                     return (
                       <li key={state.id}>
-                        <article className={`step-card ${isCycleStart ? "is-cycle-start" : ""}`}>
+                        <article
+                          className={`step-card ${isCycleStart ? "is-cycle-start" : ""} ${isTestSource ? "is-test-source" : ""} ${isTestTarget ? "is-test-target" : ""}`}
+                        >
                           {editing === state.id ? (
                             <StateEditor
                               disabled={isSaving}
@@ -911,9 +1220,14 @@ export function LoopStudio({
                                     </div>
                                     {state.transitions.map((transition) => {
                                       const isUsual = sequence.chosenTransitionIds.has(transition.id);
+                                      const isTesting =
+                                        currentWiringStep?.transition.id === transition.id;
+                                      const wasTested = testedTransitionIds.includes(
+                                        transition.id,
+                                      );
                                       return (
                                         <button
-                                          className={isUsual ? "is-usual" : ""}
+                                          className={`${isUsual ? "is-usual" : ""} ${isTesting ? "is-testing" : ""} ${wasTested ? "was-tested" : ""}`}
                                           key={transition.id}
                                           onClick={() => {
                                             setSelectedStateId(state.id);
@@ -949,7 +1263,9 @@ export function LoopStudio({
                           )}
                         </article>
                         {link && (
-                          <div className={`step-connector ${hasChoice ? "has-choice" : ""}`}>
+                          <div
+                            className={`step-connector ${hasChoice ? "has-choice" : ""} ${currentWiringStep?.transition.id === link.transition.id ? "is-testing" : ""}`}
+                          >
                             <span aria-hidden="true">↓</span>
                             <p>
                               {hasChoice && <strong>Usual route · </strong>}
@@ -963,7 +1279,9 @@ export function LoopStudio({
                 </ol>
 
                 {sequence.loopBack ? (
-                  <div className="loop-back">
+                  <div
+                    className={`loop-back ${currentWiringStep?.transition.id === sequence.loopBack.transition.id ? "is-testing" : ""}`}
+                  >
                     <span aria-hidden="true">↺</span>
                     <div>
                       <strong>
@@ -1007,7 +1325,10 @@ export function LoopStudio({
                             .map((transition) => ({ source, transition })),
                         );
                         return (
-                          <article className="branch-state-card" key={state.id}>
+                          <article
+                            className={`branch-state-card ${currentWiringStep?.sourceId === state.id ? "is-test-source" : ""} ${currentWiringStep?.targetId === state.id ? "is-test-target" : ""}`}
+                            key={state.id}
+                          >
                             <div className="branch-state-topline">
                               <span>{STATE_KIND_LABEL[state.kind]}</span>
                               <button
@@ -1052,7 +1373,7 @@ export function LoopStudio({
                 {sequence.loopBack && (
                   <button
                     className="add-step-button"
-                    disabled={isSaving || isWorking}
+                    disabled={isSaving || isWorking || isAgentTesting}
                     onClick={() => void addStepBeforeRepeat()}
                     type="button"
                   >

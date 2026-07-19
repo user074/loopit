@@ -49,6 +49,17 @@ Stopping Loopit preserves these files when they have been created:
 
 - `.loopit/loop.md`, the versionable, agent-readable loop proposal.
 - `.loopit/session.json`, the resumable local-agent session identifiers.
+- `.loopit/conversation.md`, the local conversation shown after a page reload.
+- `.loopit/test-report.md`, the latest fresh-agent rehearsal report.
+
+## Test a loop before running it
+
+The **Preflight** section on the right offers two bounded tests:
+
+1. **Trace every path** animates one ordinary recurrence and every alternate transition. It fails when the cycle does not close, a transition is missing, or a structural check blocks continuation. This test is deterministic and does not start an agent.
+2. **Test with Codex** or **Test with Claude** launches a new read-only agent session with no construction-chat context. The agent challenges state inputs, completion conditions, recovery paths, interrupts, and completion exits, then saves a Markdown report. It cannot modify files or execute the proposed production work.
+
+The first test proves control-flow wiring. The second tests whether a fresh agent can understand and rehearse the contracts. Neither substitutes for a later sandboxed integration run with representative artifacts and tools; the report must identify those remaining assumptions rather than treating them as proven.
 
 ## If the original terminal is gone
 

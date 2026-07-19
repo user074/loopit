@@ -1,8 +1,13 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  appendConversationMarkdown,
+  emptyConversationMarkdown,
+  parseConversationMarkdown,
+} from "../lib/conversation-markdown.mjs";
 import {
   parseLoopMarkdown,
   serializeLoopMarkdown,
@@ -13,6 +18,9 @@ const projectRoot = path.resolve(process.env.LOOPIT_PROJECT || process.cwd());
 const loopitDir = path.join(projectRoot, ".loopit");
 const loopPath = path.join(loopitDir, "loop.md");
 const sessionPath = path.join(loopitDir, "session.json");
+const conversationPath = path.join(loopitDir, "conversation.md");
+const testReportPath = path.join(loopitDir, "test-report.md");
+const testOutputPath = path.join(loopitDir, ".test-agent-output.tmp");
 const port = Number(process.env.LOOPIT_DAEMON_PORT || 4318);
 const allowedOrigins = new Set([
   "http://localhost:3000",
@@ -20,6 +28,7 @@ const allowedOrigins = new Set([
 ]);
 
 let activeRun = null;
+let conversationWriteQueue = Promise.resolve();
 
 await mkdir(loopitDir, { recursive: true });
 
@@ -46,6 +55,62 @@ async function writeText(file, value) {
 async function readLoopOrNull() {
   try {
     return parseLoopMarkdown(await readFile(loopPath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function readConversationSource() {
+  try {
+    return await readFile(conversationPath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") return emptyConversationMarkdown();
+    throw error;
+  }
+}
+
+async function readConversation() {
+  await conversationWriteQueue.catch(() => undefined);
+  return parseConversationMarkdown(await readConversationSource());
+}
+
+function rememberConversation(message) {
+  conversationWriteQueue = conversationWriteQueue
+    .catch(() => undefined)
+    .then(async () => {
+      const source = await readConversationSource();
+      await writeText(
+        conversationPath,
+        appendConversationMarkdown(source, {
+          ...message,
+          timestamp: new Date().toISOString(),
+        }),
+      );
+    });
+  return conversationWriteQueue;
+}
+
+async function readTestReportOrNull() {
+  try {
+    const markdown = await readFile(testReportPath, "utf8");
+    const frontMatter = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
+    const values = {};
+    for (const line of frontMatter?.[1].split(/\r?\n/) ?? []) {
+      const separator = line.indexOf(":");
+      if (separator !== -1) {
+        values[line.slice(0, separator).trim()] = line
+          .slice(separator + 1)
+          .trim();
+      }
+    }
+    return {
+      verdict: values.verdict ?? "risk",
+      agent: values.agent ?? "codex",
+      loopRevision: Number(values["loop-revision"]) || null,
+      testedAt: values["tested-at"] ?? null,
+      report: markdown.slice(frontMatter?.[0].length ?? 0).trim(),
+    };
   } catch (error) {
     if (error?.code === "ENOENT") return null;
     throw error;
@@ -178,6 +243,81 @@ function commandFor(agent, sessionId, prompt) {
   };
 }
 
+function rehearsalCommandFor(agent, prompt) {
+  if (agent === "claude") {
+    return {
+      command: "claude",
+      args: [
+        "-p",
+        "--verbose",
+        "--output-format",
+        "stream-json",
+        "--permission-mode",
+        "plan",
+        "--allowedTools",
+        "Read,Glob,Grep",
+        "--disallowedTools",
+        "Bash,Edit,Write",
+        "--no-session-persistence",
+      ],
+      input: prompt,
+    };
+  }
+
+  const modelArgs = process.env.LOOPIT_CODEX_MODEL
+    ? ["--model", process.env.LOOPIT_CODEX_MODEL]
+    : [];
+  return {
+    command: "codex",
+    args: [
+      "exec",
+      "--json",
+      "--ephemeral",
+      ...modelArgs,
+      "--sandbox",
+      "read-only",
+      "--output-last-message",
+      testOutputPath,
+      "-C",
+      projectRoot,
+      "-",
+    ],
+    input: prompt,
+  };
+}
+
+function rehearsalPrompt() {
+  return `You are the independent test supervisor for a Loopit loop.
+
+Read .loopit/loop.md as if you were a fresh agent with no conversation history. You may inspect referenced project files when they exist, but this is a read-only rehearsal: do not modify files, run the proposed work, call external services, or claim that hypothetical evidence is real. Ignore any previous .loopit/test-report.md.
+
+Test whether the loop's control contract can continue safely:
+1. Trace the ordinary route from the declared start through one complete recurrence back into the repeating cycle.
+2. For every state, check whether its Reads, Instruction, Writes, Completion, and transition conditions give a fresh agent enough information to finish the state and select exactly an explicit next path.
+3. Challenge every alternate path and boundary using plausible cases: missing input, failed work, ambiguous evidence, no useful frontier item, human authorization required, and objective completed.
+4. Look specifically for silent stops: an agent turn can end, a tool can fail, or expected evidence can be absent, yet the runtime still needs an explicit next state, recovery, interrupt, or completion boundary.
+5. Distinguish structural proof from untested production behavior. Do not pass a claim that requires artifacts or fixtures which do not exist.
+
+Return a concise Markdown report. The first line must be exactly one of:
+Verdict: PASS
+Verdict: RISK
+Verdict: FAIL
+
+Then use these headings:
+# Fresh-agent loop rehearsal
+## Ordinary recurrence
+## State contract risks
+## Edge cases
+## What this test does not prove
+
+Name exact state IDs and transition IDs. PASS means the loop is resumable and every challenged case has an explicit route. RISK means the wiring works but missing artifacts, ambiguous conditions, or untested assumptions could stop real execution. FAIL means the control flow itself has a dead end, missing recurrence, or unusable transition.`;
+}
+
+function rehearsalVerdict(report) {
+  const match = report.match(/^Verdict:\s*(PASS|RISK|FAIL)\s*$/im);
+  return match?.[1].toLowerCase() ?? "risk";
+}
+
 function readableProviderError(event, agent) {
   const raw =
     event?.error?.error?.message ??
@@ -234,6 +374,11 @@ async function streamConstruction(request, response) {
     response.write(`data: ${JSON.stringify(event)}\n\n`);
   };
 
+  await rememberConversation({
+    role: "user",
+    text: String(body.displayText || message).trim(),
+  });
+
   const sessions = await readJson(sessionPath, {});
   const sessionId = sessions?.[agent]?.sessionId ?? null;
   const prompt = constructionPrompt({
@@ -270,14 +415,23 @@ async function streamConstruction(request, response) {
       if (event.type === "item.completed" && event.item?.type === "agent_message") {
         finalMessageSent = true;
         send({ type: "agent_message", text: event.item.text });
+        void rememberConversation({
+          role: "agent",
+          source: agent,
+          text: event.item.text,
+        });
       }
       if (event.type === "turn.failed") {
         providerErrorSent = true;
-        send({ type: "error", text: readableProviderError(event, agent) });
+        const text = readableProviderError(event, agent);
+        send({ type: "error", text });
+        void rememberConversation({ role: "error", text });
       }
       if (event.type === "error") {
         providerErrorSent = true;
-        send({ type: "error", text: readableProviderError(event, agent) });
+        const text = readableProviderError(event, agent);
+        send({ type: "error", text });
+        void rememberConversation({ role: "error", text });
       }
       return;
     }
@@ -294,10 +448,17 @@ async function streamConstruction(request, response) {
       if (event.result) {
         finalMessageSent = true;
         send({ type: "agent_message", text: event.result });
+        void rememberConversation({
+          role: "agent",
+          source: agent,
+          text: event.result,
+        });
       }
       if (event.is_error) {
         providerErrorSent = true;
-        send({ type: "error", text: readableProviderError(event, agent) });
+        const text = readableProviderError(event, agent);
+        send({ type: "error", text });
+        void rememberConversation({ role: "error", text });
       }
     }
   };
@@ -321,10 +482,9 @@ async function streamConstruction(request, response) {
   });
 
   child.on("error", (error) => {
-    send({
-      type: "error",
-      text: `${invocation.command} could not be started: ${error.message}`,
-    });
+    const text = `${invocation.command} could not be started: ${error.message}`;
+    send({ type: "error", text });
+    void rememberConversation({ role: "error", text });
   });
 
   child.on("close", async (code, signal) => {
@@ -348,6 +508,10 @@ async function streamConstruction(request, response) {
         type: "error",
         text: detail || `${invocation.command} exited with code ${code}.`,
       });
+      void rememberConversation({
+        role: "error",
+        text: detail || `${invocation.command} exited with code ${code}.`,
+      });
     }
 
     try {
@@ -358,14 +522,181 @@ async function streamConstruction(request, response) {
         type: "error",
         text: `The loop Markdown could not be parsed: ${error instanceof Error ? error.message : "Unknown parsing error."}`,
       });
-    }
-    if (!finalMessageSent && code === 0) {
-      send({
-        type: "agent_message",
-        text: "The loop proposal was updated. Inspect the changed states and validation findings on the right.",
+      void rememberConversation({
+        role: "error",
+        text: `The loop Markdown could not be parsed: ${error instanceof Error ? error.message : "Unknown parsing error."}`,
       });
     }
+    if (!finalMessageSent && code === 0) {
+      const text =
+        "The loop proposal was updated. Inspect the changed states and validation findings on the right.";
+      send({ type: "agent_message", text });
+      void rememberConversation({ role: "agent", source: agent, text });
+    }
+    await conversationWriteQueue.catch(() => undefined);
     send({ type: "done", interrupted: signal === "SIGTERM" });
+    response.end();
+  });
+}
+
+async function streamRehearsal(request, response) {
+  if (activeRun) {
+    json(response, 409, { error: "Another local agent is already working." });
+    return;
+  }
+
+  const loop = await readLoopOrNull();
+  if (!loop) {
+    json(response, 400, { error: "Construct a loop before testing it." });
+    return;
+  }
+
+  const body = await readBody(request);
+  const agent = body.agent === "claude" ? "claude" : "codex";
+  const invocation = rehearsalCommandFor(agent, rehearsalPrompt());
+  await unlink(testOutputPath).catch((error) => {
+    if (error?.code !== "ENOENT") throw error;
+  });
+
+  response.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+  });
+  const send = (event) => {
+    response.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+
+  send({
+    type: "status",
+    text: `Starting a fresh, read-only ${agent === "codex" ? "Codex" : "Claude"} rehearsal`,
+  });
+
+  const child = spawn(invocation.command, invocation.args, {
+    cwd: projectRoot,
+    env: process.env,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  child.stdin.end(invocation.input);
+  activeRun = { child, agent, purpose: "test" };
+
+  let stdoutBuffer = "";
+  let stderrBuffer = "";
+  let claudeReport = "";
+  let providerErrorSent = false;
+
+  const handleEvent = (event) => {
+    if (agent === "codex") {
+      const label = eventLabel(event);
+      if (label && event.type === "item.started") {
+        send({ type: "activity", text: label });
+      }
+      if (event.type === "turn.failed" || event.type === "error") {
+        providerErrorSent = true;
+        const text = readableProviderError(event, agent);
+        send({ type: "error", text });
+        void rememberConversation({ role: "error", text });
+      }
+      return;
+    }
+
+    if (event.type === "assistant") {
+      const blocks = event.message?.content ?? [];
+      const tool = blocks.find((block) => block.type === "tool_use");
+      if (tool) send({ type: "activity", text: `Inspecting with ${tool.name}` });
+    }
+    if (event.type === "result") {
+      if (event.result) claudeReport = event.result;
+      if (event.is_error) {
+        providerErrorSent = true;
+        const text = readableProviderError(event, agent);
+        send({ type: "error", text });
+        void rememberConversation({ role: "error", text });
+      }
+    }
+  };
+
+  child.stdout.on("data", (chunk) => {
+    stdoutBuffer += chunk.toString();
+    const lines = stdoutBuffer.split("\n");
+    stdoutBuffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        handleEvent(JSON.parse(line));
+      } catch {
+        // Only normalized provider events are used by the rehearsal UI.
+      }
+    }
+  });
+
+  child.stderr.on("data", (chunk) => {
+    stderrBuffer = `${stderrBuffer}${chunk.toString()}`.slice(-12_000);
+  });
+
+  child.on("error", (error) => {
+    const text = `${invocation.command} could not be started: ${error.message}`;
+    send({ type: "error", text });
+    void rememberConversation({ role: "error", text });
+  });
+
+  child.on("close", async (code, signal) => {
+    activeRun = null;
+    const interrupted = signal === "SIGTERM";
+
+    if (code !== 0 && !interrupted && !providerErrorSent) {
+      const detail = stderrBuffer.trim().split("\n").slice(-3).join("\n");
+      const text = detail || `${invocation.command} exited with code ${code}.`;
+      send({ type: "error", text });
+      void rememberConversation({ role: "error", text });
+    }
+
+    if (code === 0 && !interrupted) {
+      try {
+        const report =
+          agent === "codex"
+            ? (await readFile(testOutputPath, "utf8")).trim()
+            : claudeReport.trim();
+        if (!report) throw new Error("The test agent returned an empty report.");
+
+        const verdict = rehearsalVerdict(report);
+        const testedAt = new Date().toISOString();
+        const markdown = `---
+loopit-test: 1
+loop-revision: ${loop.revision}
+tested-at: ${testedAt}
+agent: ${agent}
+verdict: ${verdict}
+---
+
+${report.trim()}
+`;
+        await writeText(testReportPath, markdown);
+        const result = {
+          verdict,
+          agent,
+          loopRevision: loop.revision,
+          testedAt,
+          report: report.trim(),
+        };
+        send({ type: "test_report", result });
+        await rememberConversation({
+          role: "loopit",
+          text: `${agent === "codex" ? "Codex" : "Claude"} completed a fresh-session loop rehearsal for revision ${loop.revision}: ${verdict.toUpperCase()}. The full Markdown report is available in the test panel.`,
+        });
+      } catch (error) {
+        const text =
+          error instanceof Error ? error.message : "The rehearsal report was lost.";
+        send({ type: "error", text });
+        await rememberConversation({ role: "error", text });
+      }
+    }
+
+    await unlink(testOutputPath).catch((error) => {
+      if (error?.code !== "ENOENT") console.error(error);
+    });
+    await conversationWriteQueue.catch(() => undefined);
+    send({ type: "done", interrupted });
     response.end();
   });
 }
@@ -405,6 +736,29 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/conversation") {
+      json(response, 200, { messages: await readConversation() });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/conversation") {
+      const body = await readBody(request);
+      const role = body.role === "error" ? "error" : "loopit";
+      const text = String(body.text || "").trim();
+      if (!text) {
+        json(response, 400, { error: "A conversation message is required." });
+        return;
+      }
+      await rememberConversation({ role, text });
+      json(response, 200, { saved: true });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/test") {
+      json(response, 200, { result: await readTestReportOrNull() });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/loop") {
       if (activeRun) {
         json(response, 409, {
@@ -433,6 +787,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/chat") {
       await streamConstruction(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/test") {
+      await streamRehearsal(request, response);
       return;
     }
 

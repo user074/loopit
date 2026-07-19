@@ -61,6 +61,15 @@ test("validation identifies a nonterminal dead end", () => {
 
 test("the displayed state flow follows a reachable cycle and keeps branches aside", () => {
   const sequence = primarySequence(loop);
+  const sideTransitions = loop.states.flatMap((state) =>
+    state.transitions.filter(
+      (transition) => !sequence.chosenTransitionIds.has(transition.id),
+    ),
+  );
+  const transitionCount = loop.states.reduce(
+    (total, state) => total + state.transitions.length,
+    0,
+  );
 
   assert.deepEqual(
     sequence.states.map((state) => state.id),
@@ -70,6 +79,7 @@ test("the displayed state flow follows a reachable cycle and keeps branches asid
   assert.equal(sequence.loopBack?.targetIndex, 1);
   assert.equal(sequence.chosenTransitionIds.has("observe-to-human"), false);
   assert.equal(sequence.chosenTransitionIds.has("evaluate-to-complete"), false);
+  assert.equal(sequence.chosenTransitionIds.size + sideTransitions.length, transitionCount);
 });
 
 test("the displayed state flow backtracks past a dead end to find the loop", () => {
