@@ -69,6 +69,15 @@ Updated state + frontier
 
 The construction agent uses this invariant to check continuity, then translates it into the project's own work cycle. A research user should see hypotheses, experiments, evidence, and belief updates. A product builder should see capability gaps, feature slices, working builds, and product decisions. If the right panel still says only “work contract” and “result package” after the domain is understood, construction is not finished.
 
+### Choose the subject of the loop first
+
+The product being described is not always the work the loop should perform. “Build an agent that continuously searches and applies for jobs” contains two possible loops:
+
+- A **development loop** that repeatedly selects a missing capability, designs a slice, implements and tests it, and updates product state.
+- An **operating loop** in which an already-built agent repeatedly searches, applies, reconciles responses, and updates its search frontier.
+
+Creation language such as **build**, **create**, **develop**, or **make an app/agent** defaults to the development loop. The described future behavior becomes the capability frontier and acceptance scenarios; it does not become the recurring state flow. An operating loop should be proposed only when the user says the system already exists or explicitly asks to run or operate it. If both are genuinely plausible, the agent asks which subject to construct before writing the loop. If both are wanted, they remain separate loops and development comes first unless the user chooses otherwise.
+
 A prompt requests an action. A plan anticipates steps. A workflow follows predefined transitions. A loop observes what happened, judges what it means, updates its model of the work, and derives what should happen next.
 
 ## The minimal loop contract
@@ -82,6 +91,8 @@ Every domain loop needs:
 - **Result package** — the portable handoff containing the deliverable, evidence, outcome, provenance, and unresolved findings.
 - **Integration policy** — how a result changes durable state, resolves or creates frontier items, and selects another contract.
 
+The frontier is not merely a queue. It is a derived view of the distance between current evidence and the objective. Consuming its present items without regenerating that comparison produces a finite workflow, not a continuing loop.
+
 The loop engine can remain consistent across domains, but the loop structure does not have to. Its visible stages should match the natural transformations and handoffs of the work. Split a stage only when it produces a meaningful deliverable for a different consumer or kind of judgment; combine stages when separating them would add ceremony without a useful handoff.
 
 | Work | Concrete recurring loop | Portable handoff |
@@ -93,6 +104,19 @@ The loop engine can remain consistent across domains, but the loop structure doe
 | Business | Opportunity or decision frontier → analysis or action brief → proposal, campaign, or operating decision → measure outcome → update business model and priorities ↺ | Decision or outcome packet with sources, assumptions, metrics, risks, and recommended follow-up |
 
 These are examples, not preset templates. The construction agent should inspect the actual project and propose the smallest concrete loop that fits it. The user then corrects its phases, handoffs, and priorities before verification.
+
+### Frontier replenishment is what makes the loop continue
+
+A back arrow only proves that control can return. It does not prove that useful next work exists. Every loop therefore needs a domain-specific frontier replenishment contract.
+
+Each new frontier item must cite:
+
+- The objective criterion, requirement, question, or declared outcome it advances.
+- The result, observation, failed check, missing evidence, or explicit human scope change that caused it to exist.
+- Why it is not already resolved or duplicated.
+- What evidence would allow the loop to retire it.
+
+When integration empties the current frontier, the loop compares durable state and evidence with the objective. That comparison must produce exactly one justified outcome: new objective-backed frontier work, a scheduled observation when external change is expected, one human-owned decision, or a completion candidate. Empty work is never an unexplained stop, but continuity is not permission to invent unrelated or low-value work.
 
 ### The result package is the unit of handoff
 
@@ -126,17 +150,19 @@ The first product problem is not monitoring. It is helping a user create a loop 
 
 The user should not need to place nodes or write a loop specification manually. In chat, the construction agent should:
 
-1. Inspect the existing project, tools, documents, and environment.
-2. Present its understanding for correction.
-3. Clarify the objective, success conditions, constraints, and available resources.
-4. Infer the work's natural recurring cycle rather than imposing generic phases.
-5. Identify its existing deliverables, the producer and consumer of each handoff, and the judgment each handoff enables.
-6. Give every visible phase and artifact a concrete project-specific name.
-7. Define the smallest domain-named result package that makes the primary deliverable inspectable and portable across agents and sessions.
-8. Identify durable state, the frontier, and how an integrated result changes both.
-9. Propose the smallest coherent concrete loop for the user to correct; do not ask the user to design it from scratch.
-10. Define runtime policies for autonomy, interruption, budget, recovery, and completion separately from the domain loop.
-11. Generate the edited loop, ask the user to confirm the important choices, and run a fresh-session rehearsal.
+1. Separate the thing being built or operated from the work the loop itself should repeatedly advance.
+2. Classify the loop subject as development, operation, research, design, or another concrete mode, and present that interpretation for correction.
+3. Inspect the existing project, tools, documents, and environment.
+4. Clarify the objective, success conditions, constraints, and available resources.
+5. Infer the chosen work mode's natural recurring cycle rather than imposing generic phases.
+6. Identify its existing deliverables, the producer and consumer of each handoff, and the judgment each handoff enables.
+7. Give every visible phase and artifact a concrete project-specific name.
+8. Define the smallest domain-named result package that makes the primary deliverable inspectable and portable across agents and sessions.
+9. Identify durable state, the initial frontier, and how an integrated result changes both.
+10. Define how the objective and new evidence replenish the frontier, including the empty-frontier protocol and the rule that prevents unrelated busywork.
+11. Propose the smallest coherent concrete loop for the user to correct; do not ask the user to design it from scratch.
+12. Define runtime policies for autonomy, interruption, budget, recovery, and completion separately from the domain loop.
+13. Generate the edited loop, ask the user to confirm the important choices, and run a fresh-session rehearsal.
 
 ### Prove continuity
 
@@ -172,9 +198,10 @@ Loopit should be able to validate a small set of universal rules:
 3. No result package without an inspectable deliverable or explicit failed or blocked outcome.
 4. No result is complete until its consumer can interpret it without hidden chat context.
 5. No iteration ends before the result is integrated into durable state and the frontier.
-6. No continuation without a justified next work contract.
+6. No continuation without a justified next work contract traceable to the objective and new evidence.
 7. No stopping except at a runtime boundary.
 8. Every saved result and state must be consumable by a fresh agent session.
+9. An empty frontier must trigger objective comparison, not silent stopping or invented busywork.
 
 The runtime, not an individual agent response, owns continuation. An agent finishing a turn does not mean the mission is complete.
 
