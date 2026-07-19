@@ -2,6 +2,7 @@
 loopit: 1
 revision: 1
 status: draft
+completion-policy: confirm
 start: observe-work
 ---
 
@@ -91,7 +92,7 @@ The evidence has an explicit interpretation.
 | Next state | When | Kind | ID |
 | --- | --- | --- | --- |
 | `update-state` | More useful work remains | `normal` | `evaluate-to-update` |
-| `loop-complete` | The objective is supported | `complete` | `evaluate-to-complete` |
+| `challenge-completion` | The objective appears supported by current evidence | `normal` | `evaluate-to-challenge` |
 
 ### Update durable state
 
@@ -122,6 +123,38 @@ The next session can resume from saved state.
 | --- | --- | --- | --- |
 | `evaluate-work` | Updated state reveals more work | `continue` | `update-to-evaluate` |
 
+### Challenge candidate completion
+
+**ID:** `challenge-completion`
+**Kind:** `challenge`
+**Summary:** Let a fresh agent try to disprove that the objective is complete.
+
+#### Reads
+
+- Current state
+- Evaluation
+- Evidence
+
+#### Instruction
+
+Independently challenge the candidate against the objective. Classify each new thought as an agent-owned blocking gap, a human preference or intent decision, or an optional follow-up that does not block this outcome.
+
+#### Writes
+
+- Completion challenge
+- Optional follow-up backlog
+
+#### Completion
+
+The candidate has an explicit evidence-backed verdict and every new thought has an owner and next action.
+
+#### Transitions
+
+| Next state | When | Kind | ID |
+| --- | --- | --- | --- |
+| `update-state` | An agent-owned blocking gap remains | `normal` | `challenge-to-update` |
+| `confirm-completion` | No blocking gap remains and the candidate is ready for human acceptance | `interrupt` | `challenge-to-confirm` |
+
 ### Wait for human
 
 **ID:** `wait-for-human`
@@ -150,11 +183,41 @@ The decision is clear enough to continue.
 | --- | --- | --- | --- |
 | `update-state` | The human answers | `normal` | `human-to-update` |
 
+### Confirm candidate completion
+
+**ID:** `confirm-completion`
+**Kind:** `interrupt`
+**Summary:** Ask whether to accept the challenged candidate or incorporate another human thought.
+
+#### Reads
+
+- Completion challenge
+- Optional follow-up backlog
+
+#### Instruction
+
+Present the candidate, evidence, challenger verdict, and optional follow-ups. Ask one focused question: accept this outcome, or provide a thought that should become another blocking gap.
+
+#### Writes
+
+- Human completion decision
+
+#### Completion
+
+The acceptance or new blocking input is recorded explicitly.
+
+#### Transitions
+
+| Next state | When | Kind | ID |
+| --- | --- | --- | --- |
+| `loop-complete` | The human accepts the challenged candidate | `complete` | `confirm-to-complete` |
+| `update-state` | The human adds a blocking thought | `normal` | `confirm-to-update` |
+
 ### Loop complete
 
 **ID:** `loop-complete`
 **Kind:** `terminal`
-**Summary:** Preserve the supported outcome and stop.
+**Summary:** Preserve the challenged and accepted outcome, then stop.
 
 #### Reads
 

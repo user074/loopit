@@ -12,9 +12,9 @@ This version focuses only on the first product problem: working with an agent to
 
 The screen has two connected parts:
 
-- **Construction chat** launches the Codex or Claude Code CLI already installed and authenticated on the local machine. A new project begins empty: the agent first asks what work the user wants to keep progressing, then proposes the smallest useful loop. The visible conversation survives reloads in local `.loopit/conversation.md` while the selected CLI session preserves the agent's own context.
-- **Visual loop editor** presents the repeating route, local decisions, re-entry paths, interrupts, and completion exits without turning them into a tangled graph. The user can edit the objective, state contracts, and transitions directly; every visual save rewrites `.loopit/loop.md`, which the agent reads on its next turn.
-- **Preflight testing** can trace every transition in seconds, visibly prove that the recurrence closes, and then launch a fresh read-only local agent to challenge state contracts and edge cases. The rehearsal cannot modify or execute the project; its latest Markdown report is saved at `.loopit/test-report.md`.
+- **Construction chat** launches the Codex or Claude Code CLI already installed and authenticated on the local machine. A new project begins empty: the agent first asks what work the user wants to keep progressing, then proposes the smallest useful loop. Conversations survive reloads as local Markdown files in `.loopit/conversations/`. **New** starts with an empty agent session, while **History** reopens a past conversation together with its own resumable CLI context.
+- **Visual loop editor** presents the repeating route, local decisions, re-entry paths, interrupts, and completion policy without turning them into a tangled graph. The user can edit the objective, completion policy, state contracts, and transitions directly; every visual save rewrites `.loopit/loop.md`, which the agent reads on its next turn.
+- **Preflight testing** can trace every transition in seconds, visibly prove that the recurrence closes, and then launch a fresh read-only local agent to challenge state contracts and edge cases. The rehearsal cannot modify or execute the project; its latest Markdown report is saved at `.loopit/test-report.md`. A non-passing result automatically becomes the next construction turn: the agent repairs agent-owned gaps and asks one focused question for missing human intent or authority.
 
 Requirements: Node.js 22.13 or newer and at least one locally authenticated agent CLI (`codex` or `claude`). No separate API key or hosted Loopit account is used.
 
@@ -23,9 +23,9 @@ npm install
 npm run dev
 ```
 
-Then open [http://localhost:3000](http://localhost:3000). The web process and localhost-only agent daemon start together. Choose **Construct my first loop** or describe the work directly in chat. Construction-agent sessions are remembered in `.loopit/session.json`, the visible conversation in `.loopit/conversation.md`, and the loop proposal in the versionable `.loopit/loop.md`.
+Then open [http://localhost:3000](http://localhost:3000). The web process and localhost-only agent daemon start together. Choose **Construct my first loop** or describe the work directly in chat. Construction-agent session pointers are remembered in `.loopit/session.json`, readable conversation histories in `.loopit/conversations/*.md`, and the loop proposal in the versionable `.loopit/loop.md`.
 
-Markdown is the durable agent-facing source of truth, not the primary human interface. Loopit parses it into an internal graph for deterministic checks and presents the understandable, interactive version in the web UI. JSON is used only for the machine-owned CLI session identifiers; no generated JSON copy of the loop, conversation, or test report is committed or maintained.
+Markdown is the durable agent-facing source of truth, not the primary human interface. Loopit parses it into an internal graph for deterministic checks and presents the understandable, interactive version in the web UI. JSON is used only for machine-owned active-conversation and CLI-session identifiers; no generated JSON copy of a loop, conversation, or test report is committed or maintained.
 
 See the [local runbook](RUNBOOK.md) for verification, stopping the current agent turn, stopping both Loopit processes, and recovering when the original terminal is gone.
 
@@ -152,6 +152,30 @@ Loopit should be able to validate a small set of universal rules:
 7. Every saved state must be resumable by a fresh agent session.
 
 The runtime, not an individual agent response, owns continuation. An agent finishing a turn does not mean the mission is complete.
+
+### Completion is a challenged decision
+
+Loopit separates three things that agents often collapse together:
+
+1. **State complete** — this bounded action produced the evidence needed to leave its current state.
+2. **Candidate complete** — the current evidence appears to satisfy the project objective.
+3. **Accepted outcome** — a fresh challenger tried to disprove the candidate, every blocking gap has a next action, and the loop's completion policy allows acceptance.
+
+The challenger is part of the loop, not a final summary prompt. It classifies each new thought before deciding what happens next:
+
+- An agent-owned blocking gap returns to the active frontier.
+- Missing human intent, preference, fact, or authority becomes one focused question.
+- A useful but nonblocking idea is preserved in a follow-up backlog instead of silently expanding the present objective.
+
+Each loop declares one policy:
+
+| Policy | Best fit | Acceptance rule |
+|---|---|---|
+| **Human confirms candidate** | Product and engineering by default | A fresh challenge passes, then the human accepts the scoped outcome or adds another blocking thought. |
+| **Evidence can auto-accept** | Narrow work with objective checks | A fresh challenge finds no blocker and every declared evidence check passes. |
+| **Continuous until interrupted** | Research and open-ended exploration | New findings replenish the frontier; a human, budget, or explicit boundary pauses the loop. |
+
+Automation can generate the questions a thoughtful human would ask—recheck evidence, test edge cases, inspect unmet requirements, compare the result with the objective—but it should not invent taste, product intent, risk tolerance, or permission. Those remain human-owned inputs. This lets a product or engineering loop continue autonomously for long periods without mistaking its first plausible draft for the final answer.
 
 ## Stage 2: operate and evolve a loop
 

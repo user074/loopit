@@ -48,18 +48,20 @@ The development wrapper sends a termination signal to both the web interface and
 Stopping Loopit preserves these files when they have been created:
 
 - `.loopit/loop.md`, the versionable, agent-readable loop proposal.
-- `.loopit/session.json`, the resumable local-agent session identifiers.
-- `.loopit/conversation.md`, the local conversation shown after a page reload.
+- `.loopit/session.json`, the active-conversation pointer and resumable local-agent session identifiers.
+- `.loopit/conversations/*.md`, the readable local conversation histories shown after a page reload or selected from **History**.
 - `.loopit/test-report.md`, the latest fresh-agent rehearsal report.
+
+Use **New** in the conversation header to start an empty conversation with a fresh Codex or Claude session. The current conversation moves into **History** rather than being destroyed. Selecting a past conversation restores both its visible messages and its own local-agent session. Conversation switching does not delete or replace `.loopit/loop.md`; all conversations in the project discuss the same current loop definition.
 
 ## Test a loop before running it
 
 The **Preflight** section on the right offers two bounded tests:
 
 1. **Trace every path** animates one ordinary recurrence and every alternate transition. It fails when the cycle does not close, a transition is missing, or a structural check blocks continuation. This test is deterministic and does not start an agent.
-2. **Test with Codex** or **Test with Claude** launches a new read-only agent session with no construction-chat context. The agent challenges state inputs, completion conditions, recovery paths, interrupts, and completion exits, then saves a Markdown report. It cannot modify files or execute the proposed production work.
+2. **Test with Codex** or **Test with Claude** launches a new read-only agent session with no construction-chat context. The agent challenges state inputs, completion conditions, recovery paths, interrupts, and completion exits, then saves a Markdown report. It also verifies that a first draft or completed iteration cannot masquerade as project completion: candidate completion must follow the selected policy and, for human-confirmed or evidence-based completion, pass through a fresh challenger. The rehearsal cannot modify files or execute the proposed production work. If the result needs work, Loopit immediately sends it to the construction agent: agent-owned gaps are repaired in the loop, while missing human intent, permission, facts, thresholds, or policy become one focused question in chat.
 
-The first test proves control-flow wiring. The second tests whether a fresh agent can understand and rehearse the contracts. Neither substitutes for a later sandboxed integration run with representative artifacts and tools; the report must identify those remaining assumptions rather than treating them as proven.
+The first test proves control-flow wiring. The second tests whether a fresh agent can understand and rehearse the contracts. Neither substitutes for a later sandboxed integration run with representative artifacts and tools; the report must turn those remaining assumptions into explicit next test actions rather than treating them as proven or silently stopping.
 
 ## If the original terminal is gone
 

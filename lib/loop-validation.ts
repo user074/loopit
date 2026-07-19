@@ -3,6 +3,7 @@ import type {
   LoopState,
   ValidationFinding,
 } from "./loop-types";
+import { primarySequence } from "./loop-flow.ts";
 
 function finding(
   id: string,
@@ -14,7 +15,12 @@ function finding(
   return { id, severity, title, detail, elementId };
 }
 
-function reachableStates(loop: LoopDefinition, stateMap: Map<string, LoopState>) {
+function reachableStates(
+  loop: LoopDefinition,
+  stateMap: Map<string, LoopState>,
+  canTraverse: (transition: LoopState["transitions"][number]) => boolean =
+    () => true,
+) {
   const reachable = new Set<string>();
   const queue = stateMap.has(loop.startState) ? [loop.startState] : [];
 
@@ -24,7 +30,11 @@ function reachableStates(loop: LoopDefinition, stateMap: Map<string, LoopState>)
     reachable.add(id);
     const state = stateMap.get(id);
     state?.transitions.forEach((transition) => {
-      if (stateMap.has(transition.to) && !reachable.has(transition.to)) {
+      if (
+        canTraverse(transition) &&
+        stateMap.has(transition.to) &&
+        !reachable.has(transition.to)
+      ) {
         queue.push(transition.to);
       }
     });
@@ -33,39 +43,36 @@ function reachableStates(loop: LoopDefinition, stateMap: Map<string, LoopState>)
   return reachable;
 }
 
-function findReachableCycle(
-  loop: LoopDefinition,
+function canReachTransitionKind(
+  startId: string,
   stateMap: Map<string, LoopState>,
+  kind: "complete",
+  canTraverse: (transition: LoopState["transitions"][number]) => boolean =
+    () => true,
 ) {
   const visited = new Set<string>();
-  const active = new Set<string>();
-  let cycle: string[] = [];
+  const queue = stateMap.has(startId) ? [startId] : [];
 
-  function visit(id: string, path: string[]): boolean {
-    if (active.has(id)) {
-      const start = path.indexOf(id);
-      cycle = [...path.slice(start), id];
+  while (queue.length) {
+    const id = queue.shift()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const state = stateMap.get(id);
+    if (state?.transitions.some((transition) => transition.kind === kind)) {
       return true;
     }
-    if (visited.has(id)) return false;
-
-    visited.add(id);
-    active.add(id);
-    const nextPath = [...path, id];
-    const state = stateMap.get(id);
-
-    for (const transition of state?.transitions ?? []) {
-      if (stateMap.has(transition.to) && visit(transition.to, nextPath)) {
-        return true;
+    state?.transitions.forEach((transition) => {
+      if (
+        canTraverse(transition) &&
+        stateMap.has(transition.to) &&
+        !visited.has(transition.to)
+      ) {
+        queue.push(transition.to);
       }
-    }
-
-    active.delete(id);
-    return false;
+    });
   }
 
-  if (stateMap.has(loop.startState)) visit(loop.startState, []);
-  return cycle;
+  return false;
 }
 
 export function validateLoop(loop: LoopDefinition): ValidationFinding[] {
@@ -183,7 +190,15 @@ export function validateLoop(loop: LoopDefinition): ValidationFinding[] {
     );
   }
 
-  const cycle = findReachableCycle(loop, stateMap);
+  const sequence = primarySequence(loop);
+  const cycle = sequence.loopBack
+    ? [
+        ...sequence.states
+          .slice(sequence.loopBack.targetIndex)
+          .map((state) => state.id),
+        sequence.loopBack.targetId,
+      ]
+    : [];
   if (!cycle.length) {
     findings.push(
       finding(
@@ -253,13 +268,149 @@ export function validateLoop(loop: LoopDefinition): ValidationFinding[] {
     );
   }
 
-  if (!boundaryKinds.has("complete")) {
+  const challengeStates = loop.states.filter(
+    (state) => state.kind === "challenge",
+  );
+  const completionRequiresChallenge =
+    loop.completionPolicy === "confirm" ||
+    loop.completionPolicy === "automatic";
+
+  if (completionRequiresChallenge && challengeStates.length === 0) {
+    findings.push(
+      finding(
+        "missing-completion-challenge",
+        "error",
+        "Candidate completion is not challenged",
+        "Add a fresh completion-challenge state before the project can be accepted.",
+      ),
+    );
+  }
+
+  if (completionRequiresChallenge && challengeStates.length > 0) {
+    const stateMapWithoutChallenge = new Map(
+      loop.states
+        .filter((state) => state.kind !== "challenge")
+        .map((state) => [state.id, state]),
+    );
+    const reachableWithoutChallenge = reachableStates(
+      loop,
+      stateMapWithoutChallenge,
+      (transition) => !/challeng/i.test(transition.when),
+    );
+    const bypassSource = loop.states.find(
+      (state) =>
+        reachableWithoutChallenge.has(state.id) &&
+        state.transitions.some((transition) => transition.kind === "complete"),
+    );
+
+    if (bypassSource) {
+      findings.push(
+        finding(
+          "completion-bypasses-challenge",
+          "error",
+          "Completion can bypass its challenger",
+          `“${bypassSource.name}” can accept the project along a path that never passes through a fresh completion challenge.`,
+          bypassSource.id,
+        ),
+      );
+    }
+  }
+
+  for (const state of challengeStates) {
+    const hasReturnToWork = state.transitions.some((transition) => {
+      const target = stateMap.get(transition.to);
+      return (
+        (transition.kind === "normal" || transition.kind === "continue") &&
+        target?.kind !== "challenge" &&
+        target?.kind !== "interrupt" &&
+        target?.kind !== "terminal"
+      );
+    });
+
+    if (!hasReturnToWork) {
+      findings.push(
+        finding(
+          `challenge-cannot-continue-${state.id}`,
+          "error",
+          `${state.name} cannot reopen the work`,
+          "A completion challenge must route agent-owned gaps back into continuing work.",
+          state.id,
+        ),
+      );
+    }
+
+    if (
+      loop.completionPolicy === "confirm" &&
+      !state.transitions.some((transition) => transition.kind === "interrupt")
+    ) {
+      findings.push(
+        finding(
+          `challenge-missing-confirmation-${state.id}`,
+          "error",
+          `${state.name} cannot request acceptance`,
+          "The human-confirmation policy needs an interrupt from the challenged candidate to a focused acceptance decision.",
+          state.id,
+        ),
+      );
+    }
+
+    if (
+      loop.completionPolicy === "confirm" &&
+      !canReachTransitionKind(state.id, stateMap, "complete")
+    ) {
+      findings.push(
+        finding(
+          `challenge-missing-acceptance-${state.id}`,
+          "error",
+          `${state.name} cannot reach an accepted outcome`,
+          "The confirmation path must lead from the challenged candidate to an explicit human acceptance transition.",
+          state.id,
+        ),
+      );
+    }
+
+    if (
+      loop.completionPolicy === "automatic" &&
+      !canReachTransitionKind(
+        state.id,
+        stateMap,
+        "complete",
+        (transition) => transition.kind !== "interrupt",
+      )
+    ) {
+      findings.push(
+        finding(
+          `challenge-missing-auto-acceptance-${state.id}`,
+          "error",
+          `${state.name} cannot accept proven completion`,
+          "The evidence-based policy needs a reachable acceptance path after the challenge passes.",
+          state.id,
+        ),
+      );
+    }
+  }
+
+  if (
+    loop.completionPolicy === "continuous" &&
+    boundaryKinds.has("complete")
+  ) {
+    findings.push(
+      finding(
+        "continuous-has-completion",
+        "warning",
+        "The continuous loop can terminate itself",
+        "Confirm that this completion exit is an intentional boundary; otherwise return new findings to the frontier and pause only for a human, budget, or declared limit.",
+      ),
+    );
+  } else if (!boundaryKinds.has("complete")) {
     findings.push(
       finding(
         "missing-completion",
-        "warning",
+        completionRequiresChallenge ? "error" : "pass",
         "No completion path is defined",
-        "Describe the evidence that would make the loop complete.",
+        completionRequiresChallenge
+          ? "Describe the acceptance path after candidate completion is challenged."
+          : "This matches the continuous policy: new findings return to the frontier until an explicit pause boundary is reached.",
       ),
     );
   }

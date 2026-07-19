@@ -3,9 +3,12 @@ export type StateKind =
   | "decide"
   | "act"
   | "evaluate"
+  | "challenge"
   | "update"
   | "interrupt"
   | "terminal";
+
+export type CompletionPolicy = "confirm" | "automatic" | "continuous";
 
 export type TransitionKind =
   | "normal"
@@ -51,6 +54,7 @@ export interface LoopDefinition {
   name: string;
   objective: string;
   status: "draft" | "confirmed";
+  completionPolicy: CompletionPolicy;
   startState: string;
   artifacts: LoopArtifact[];
   boundaries: LoopBoundary[];

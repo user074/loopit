@@ -1,5 +1,13 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -7,6 +15,7 @@ import {
   appendConversationMarkdown,
   emptyConversationMarkdown,
   parseConversationMarkdown,
+  summarizeConversationMarkdown,
 } from "../lib/conversation-markdown.mjs";
 import {
   parseLoopMarkdown,
@@ -18,7 +27,8 @@ const projectRoot = path.resolve(process.env.LOOPIT_PROJECT || process.cwd());
 const loopitDir = path.join(projectRoot, ".loopit");
 const loopPath = path.join(loopitDir, "loop.md");
 const sessionPath = path.join(loopitDir, "session.json");
-const conversationPath = path.join(loopitDir, "conversation.md");
+const legacyConversationPath = path.join(loopitDir, "conversation.md");
+const conversationsDir = path.join(loopitDir, "conversations");
 const testReportPath = path.join(loopitDir, "test-report.md");
 const testOutputPath = path.join(loopitDir, ".test-agent-output.tmp");
 const port = Number(process.env.LOOPIT_DAEMON_PORT || 4318);
@@ -30,7 +40,10 @@ const allowedOrigins = new Set([
 let activeRun = null;
 let conversationWriteQueue = Promise.resolve();
 
-await mkdir(loopitDir, { recursive: true });
+await Promise.all([
+  mkdir(loopitDir, { recursive: true }),
+  mkdir(conversationsDir, { recursive: true }),
+]);
 
 async function readJson(file, fallback = null) {
   try {
@@ -61,27 +74,126 @@ async function readLoopOrNull() {
   }
 }
 
-async function readConversationSource() {
+function newConversationId() {
+  return `conversation-${Date.now()}-${randomUUID().slice(0, 8)}`;
+}
+
+function isConversationId(value) {
+  return /^conversation-\d+-[a-f0-9-]+$/.test(String(value ?? ""));
+}
+
+function conversationPath(id) {
+  if (!isConversationId(id)) throw new Error("Invalid conversation identifier.");
+  return path.join(conversationsDir, `${id}.md`);
+}
+
+async function readConversationStore() {
+  const stored = await readJson(sessionPath, {});
+  if (
+    stored?.version === 2 &&
+    isConversationId(stored.activeConversationId) &&
+    stored.conversations &&
+    typeof stored.conversations === "object"
+  ) {
+    try {
+      await readFile(conversationPath(stored.activeConversationId), "utf8");
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      await writeText(
+        conversationPath(stored.activeConversationId),
+        emptyConversationMarkdown(),
+      );
+    }
+    return stored;
+  }
+
+  const existingFiles = (await readdir(conversationsDir))
+    .filter((name) => /^conversation-\d+-[a-f0-9-]+\.md$/.test(name))
+    .sort();
+  const activeConversationId = existingFiles.length
+    ? existingFiles.at(-1).slice(0, -3)
+    : newConversationId();
+
+  if (!existingFiles.length) {
+    let legacySource = emptyConversationMarkdown();
+    try {
+      legacySource = await readFile(legacyConversationPath, "utf8");
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    await writeText(conversationPath(activeConversationId), legacySource);
+    await unlink(legacyConversationPath).catch((error) => {
+      if (error?.code !== "ENOENT") throw error;
+    });
+  }
+
+  const legacySessions = {};
+  for (const agent of ["codex", "claude"]) {
+    if (stored?.[agent]?.sessionId) legacySessions[agent] = stored[agent];
+  }
+  const migrated = {
+    version: 2,
+    activeConversationId,
+    conversations: { [activeConversationId]: legacySessions },
+  };
+  await writeJson(sessionPath, migrated);
+  return migrated;
+}
+
+async function readConversationSource(id) {
   try {
-    return await readFile(conversationPath, "utf8");
+    return await readFile(conversationPath(id), "utf8");
   } catch (error) {
     if (error?.code === "ENOENT") return emptyConversationMarkdown();
     throw error;
   }
 }
 
-async function readConversation() {
-  await conversationWriteQueue.catch(() => undefined);
-  return parseConversationMarkdown(await readConversationSource());
+async function listConversations(activeConversationId) {
+  const files = (await readdir(conversationsDir)).filter((name) =>
+    /^conversation-\d+-[a-f0-9-]+\.md$/.test(name),
+  );
+  const conversations = await Promise.all(
+    files.map(async (name) => {
+      const id = name.slice(0, -3);
+      const summary = summarizeConversationMarkdown(
+        await readConversationSource(id),
+        id,
+      );
+      return { ...summary, active: id === activeConversationId };
+    }),
+  );
+  return conversations.sort((left, right) => {
+    if (left.active !== right.active) return left.active ? -1 : 1;
+    return (
+      String(right.updatedAt ?? right.id).localeCompare(
+        String(left.updatedAt ?? left.id),
+      )
+    );
+  });
 }
 
-function rememberConversation(message) {
+async function readConversationPayload() {
+  await conversationWriteQueue.catch(() => undefined);
+  const store = await readConversationStore();
+  return {
+    activeConversationId: store.activeConversationId,
+    messages: parseConversationMarkdown(
+      await readConversationSource(store.activeConversationId),
+    ),
+    conversations: await listConversations(store.activeConversationId),
+  };
+}
+
+function rememberConversation(message, conversationId = null) {
   conversationWriteQueue = conversationWriteQueue
     .catch(() => undefined)
     .then(async () => {
-      const source = await readConversationSource();
+      const store = await readConversationStore();
+      const targetId = conversationId ?? store.activeConversationId;
+      const source = await readConversationSource(targetId);
       await writeText(
-        conversationPath,
+        conversationPath(targetId),
         appendConversationMarkdown(source, {
           ...message,
           timestamp: new Date().toISOString(),
@@ -89,6 +201,33 @@ function rememberConversation(message) {
       );
     });
   return conversationWriteQueue;
+}
+
+async function createConversation() {
+  await conversationWriteQueue.catch(() => undefined);
+  const store = await readConversationStore();
+  const currentMessages = parseConversationMarkdown(
+    await readConversationSource(store.activeConversationId),
+  );
+  if (currentMessages.length === 0) return readConversationPayload();
+
+  const id = newConversationId();
+  await writeText(conversationPath(id), emptyConversationMarkdown());
+  store.activeConversationId = id;
+  store.conversations[id] = {};
+  await writeJson(sessionPath, store);
+  return readConversationPayload();
+}
+
+async function activateConversation(id) {
+  if (!isConversationId(id)) throw new Error("Invalid conversation identifier.");
+  await conversationWriteQueue.catch(() => undefined);
+  await readFile(conversationPath(id), "utf8");
+  const store = await readConversationStore();
+  store.activeConversationId = id;
+  store.conversations[id] ??= {};
+  await writeJson(sessionPath, store);
+  return readConversationPayload();
 }
 
 async function readTestReportOrNull() {
@@ -171,14 +310,14 @@ Your only task is to help the user construct and debug a minimal continuing-work
 If .loopit/loop.md does not exist, this is first-time initialization. Do not treat the missing file as an error. If the user has not stated a concrete objective yet, ask one focused question about what work they want to keep progressing; do not invent or create a loop prematurely. Once the objective is clear enough, create the smallest useful proposal.
 
 When a loop exists, read .loopit/loop.md before responding. Markdown is the only durable source of truth; never create a JSON copy. Preserve its constrained, readable structure:
-- YAML front matter with loopit, revision, status, and start.
+- YAML front matter with loopit, revision, status, completion-policy, and start.
 - One H1 loop name and an H2 Objective.
 - H2 Artifacts and Boundaries, with H3 entries and bold ID, Kind, and Description fields.
 - H2 States, with one H3 per state and bold ID, Kind, and Summary fields.
 - Each state keeps H4 Reads, Instruction, Writes, Completion, and Transitions sections.
 - Reads and Writes are Markdown lists.
 - Transitions use the existing four-column Markdown table: Next state, When, Kind, and ID.
-- Allowed state kinds: observe, decide, act, evaluate, update, interrupt, terminal.
+- Allowed state kinds: observe, decide, act, evaluate, challenge, update, interrupt, terminal.
 - Allowed transition kinds: normal, continue, interrupt, complete.
 - Increment revision after a meaningful change.
 
@@ -187,9 +326,15 @@ Construction principles:
 2. Every state must make its inputs, work, outputs, completion evidence, and next paths inspectable.
 3. Every nonterminal state needs an outgoing transition.
 4. A continuing cycle must evaluate evidence and update durable state before returning to more work.
-5. Human interrupts and completion must be explicit.
+5. Human interrupts and project acceptance must be explicit. Finishing a state, iteration, feature, or first draft is not project completion.
 6. Ask focused questions only when the missing choice would materially change the loop. Otherwise propose the best draft.
-7. After editing the file, respond conversationally with what changed, why, and the most important remaining uncertainty. Keep the reply concise.
+7. A failure is evidence and a transition, never an implicit stopping condition. Agent-resolvable failures must lead to bounded repair, retry, initialization, or durable state update.
+8. Missing human intent, permission, credentials, sensitive facts, acceptance thresholds, or risk policy must lead to an explicit human interrupt and one focused question. Never invent them.
+9. Missing runtime evidence must name the agent-owned action that can produce it and the explicit failure or escalation route. Never claim hypothetical evidence already exists.
+10. Choose one completion policy and record it in front matter: \`confirm\` by default for product and engineering work, \`automatic\` only when declared evidence can decide safely, or \`continuous\` for open-ended exploration that replenishes its frontier until an explicit pause boundary.
+11. Under \`confirm\` or \`automatic\`, evidence-supported completion is only a candidate. Route it through a fresh \`challenge\` state that tries to disprove completion and classifies new thoughts as agent-owned blocking gaps, human-owned intent or preference, or optional follow-up work. Agent-owned blockers return to the loop. Optional ideas go to a backlog and do not silently expand the current objective.
+12. Under \`confirm\`, the challenged candidate must reach one focused human acceptance decision. Under \`automatic\`, it may be accepted only after the fresh challenge finds no blocker and all declared evidence checks pass. A \`continuous\` loop normally has no self-selected project-completion exit.
+13. After editing the file, respond conversationally with what changed, why, and the most important remaining uncertainty. Keep the reply concise.
 
 ${selected}
 
@@ -297,6 +442,10 @@ Test whether the loop's control contract can continue safely:
 3. Challenge every alternate path and boundary using plausible cases: missing input, failed work, ambiguous evidence, no useful frontier item, human authorization required, and objective completed.
 4. Look specifically for silent stops: an agent turn can end, a tool can fail, or expected evidence can be absent, yet the runtime still needs an explicit next state, recovery, interrupt, or completion boundary.
 5. Distinguish structural proof from untested production behavior. Do not pass a claim that requires artifacts or fixtures which do not exist.
+6. Classify every issue by ownership: agent-resolvable control or scaffolding work, human-required intent or authority, or runtime evidence that needs a sandbox trial. Every issue must name its next action.
+7. Challenge false completion explicitly. Finishing a draft, one iteration, or the current frontier is not enough. Verify that the declared completion policy is followed, that a fresh challenger can reopen agent-owned gaps, and that acceptance cannot bypass the challenger. For a human-confirmed policy, verify the challenger reaches one focused human acceptance decision; for evidence-based automatic completion, verify declared checks can decide it; for continuous exploration, verify findings replenish the frontier instead of claiming project completion.
+
+A non-PASS verdict is not a terminal outcome. It means the finding becomes the next construction action: agent-owned gaps should be repaired, human-owned gaps should become one focused question, and runtime-evidence gaps should become an explicit test action with failure routing.
 
 Return a concise Markdown report. The first line must be exactly one of:
 Verdict: PASS
@@ -308,9 +457,10 @@ Then use these headings:
 ## Ordinary recurrence
 ## State contract risks
 ## Edge cases
+## Ownership and next action
 ## What this test does not prove
 
-Name exact state IDs and transition IDs. PASS means the loop is resumable and every challenged case has an explicit route. RISK means the wiring works but missing artifacts, ambiguous conditions, or untested assumptions could stop real execution. FAIL means the control flow itself has a dead end, missing recurrence, or unusable transition.`;
+Name exact state IDs and transition IDs. PASS means the loop is resumable and every challenged case has an explicit route. RISK means the wiring works but human input or runtime evidence is still required. FAIL means agent-resolvable control flow has a dead end, missing recurrence, or unusable transition. For RISK or FAIL, the Ownership and next action section must separate "Agent resolves now", "Ask human", and "Sandbox must prove" items, using "None" where a category is empty.`;
 }
 
 function rehearsalVerdict(report) {
@@ -374,12 +524,15 @@ async function streamConstruction(request, response) {
     response.write(`data: ${JSON.stringify(event)}\n\n`);
   };
 
+  const conversationStore = await readConversationStore();
+  const conversationId = conversationStore.activeConversationId;
+
   await rememberConversation({
     role: "user",
     text: String(body.displayText || message).trim(),
-  });
+  }, conversationId);
 
-  const sessions = await readJson(sessionPath, {});
+  const sessions = conversationStore.conversations[conversationId] ?? {};
   const sessionId = sessions?.[agent]?.sessionId ?? null;
   const prompt = constructionPrompt({
     message,
@@ -495,7 +648,8 @@ async function streamConstruction(request, response) {
         sessionId: discoveredSessionId,
         updatedAt: new Date().toISOString(),
       };
-      await writeJson(sessionPath, sessions);
+      conversationStore.conversations[conversationId] = sessions;
+      await writeJson(sessionPath, conversationStore);
     }
 
     if (code !== 0 && signal !== "SIGTERM" && !providerErrorSent) {
@@ -682,7 +836,7 @@ ${report.trim()}
         send({ type: "test_report", result });
         await rememberConversation({
           role: "loopit",
-          text: `${agent === "codex" ? "Codex" : "Claude"} completed a fresh-session loop rehearsal for revision ${loop.revision}: ${verdict.toUpperCase()}. The full Markdown report is available in the test panel.`,
+          text: `${agent === "codex" ? "Codex" : "Claude"} completed a fresh-session loop rehearsal for revision ${loop.revision}: ${verdict === "pass" ? "PASS" : "NEXT ACTION REQUIRED"}. The full Markdown report is available in the test panel.`,
         });
       } catch (error) {
         const text =
@@ -737,7 +891,36 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/api/conversation") {
-      json(response, 200, { messages: await readConversation() });
+      json(response, 200, await readConversationPayload());
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/conversations/new"
+    ) {
+      if (activeRun) {
+        json(response, 409, {
+          error: "Stop the active agent before starting a new conversation.",
+        });
+        return;
+      }
+      json(response, 200, await createConversation());
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/conversations/activate"
+    ) {
+      if (activeRun) {
+        json(response, 409, {
+          error: "Stop the active agent before changing conversations.",
+        });
+        return;
+      }
+      const body = await readBody(request);
+      json(response, 200, await activateConversation(String(body.id || "")));
       return;
     }
 

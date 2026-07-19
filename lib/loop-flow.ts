@@ -47,17 +47,62 @@ function orderedTransitions(state: LoopState) {
     .map(({ transition }) => transition);
 }
 
+function scoreCycle(
+  trace: CycleTrace,
+  stateMap: Map<string, LoopState>,
+) {
+  const cycleStates = trace.stateIds
+    .slice(trace.targetIndex)
+    .map((id) => stateMap.get(id))
+    .filter(Boolean) as LoopState[];
+  const cycleTransitions = trace.transitions.slice(trace.targetIndex);
+  let score = 0;
+
+  if (cycleTransitions.some((transition) => transition.kind === "continue")) {
+    score += 500;
+  }
+  if (cycleStates.some((state) => state.kind === "evaluate")) score += 300;
+  if (
+    cycleStates.some(
+      (state) => state.kind === "update" && state.writes.length > 0,
+    )
+  ) {
+    score += 200;
+  }
+  if (cycleStates.some((state) => state.kind === "act")) score += 80;
+  if (cycleStates.some((state) => state.kind === "decide")) score += 40;
+  if (
+    cycleStates.some(
+      (state) => state.kind === "interrupt" || state.kind === "terminal",
+    )
+  ) {
+    score -= 1_000;
+  }
+  if (
+    cycleTransitions.some(
+      (transition) =>
+        transition.kind === "interrupt" || transition.kind === "complete",
+    )
+  ) {
+    score -= 1_000;
+  }
+
+  return score - cycleStates.length;
+}
+
 function findCycleTrace(loop: LoopDefinition): CycleTrace | null {
   const stateMap = new Map(loop.states.map((state) => [state.id, state]));
-  const exhausted = new Set<string>();
   const active = new Map<string, number>();
   const stateIds: string[] = [];
   const transitions: LoopTransition[] = [];
+  const traces: CycleTrace[] = [];
+  let exploredPaths = 0;
 
-  function visit(id: string): CycleTrace | null {
+  function visit(id: string) {
     const state = stateMap.get(id);
-    if (!state) return null;
+    if (!state || exploredPaths >= 10_000 || traces.length >= 512) return;
 
+    exploredPaths += 1;
     active.set(id, stateIds.length);
     stateIds.push(id);
 
@@ -66,28 +111,31 @@ function findCycleTrace(loop: LoopDefinition): CycleTrace | null {
 
       const targetIndex = active.get(transition.to);
       if (targetIndex !== undefined) {
-        return {
+        traces.push({
           stateIds: [...stateIds],
           transitions: [...transitions, transition],
           targetIndex,
-        };
+        });
+        continue;
       }
 
-      if (exhausted.has(transition.to)) continue;
       transitions.push(transition);
-      const trace = visit(transition.to);
-      if (trace) return trace;
+      visit(transition.to);
       transitions.pop();
     }
 
     stateIds.pop();
     active.delete(id);
-    exhausted.add(id);
-    return null;
   }
 
   if (!stateMap.has(loop.startState)) return null;
-  return visit(loop.startState);
+  visit(loop.startState);
+  return (
+    traces.sort(
+      (left, right) =>
+        scoreCycle(right, stateMap) - scoreCycle(left, stateMap),
+    )[0] ?? null
+  );
 }
 
 function fallbackSequence(loop: LoopDefinition): PrimarySequence {

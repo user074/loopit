@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  CompletionPolicy,
   LoopDefinition,
   LoopState,
   LoopTransition,
@@ -14,6 +15,14 @@ import { validateLoop } from "@/lib/loop-validation";
 const DAEMON_URL = "http://127.0.0.1:4318";
 const START_CONSTRUCTION =
   "Begin first-time loop construction. No loop exists yet. Ask me one focused question about what work I want to keep progressing before proposing any states.";
+const RESOLVE_TEST_FAILURE = `The latest .loopit/test-report.md found unresolved preflight issues. Treat this result as the next construction action, never as a reason to stop.
+
+Read both .loopit/loop.md and .loopit/test-report.md. Classify every issue by ownership:
+- Agent-owned: missing control logic, recovery, initialization, state contract, transition priority, or artifact scaffold that an agent can define safely. Resolve these now by making the smallest coherent update to loop.md.
+- Human-owned: product intent, acceptance threshold, permission, credential, sensitive fact, risk choice, or policy that the agent must not invent. After resolving agent-owned issues, ask exactly one focused question for the highest-leverage missing human input.
+- Runtime evidence: behavior that only a later sandbox execution can prove. Encode the responsible action, evidence, failure route, and retry or interrupt boundary; do not claim it already passed.
+
+Every failure, missing artifact, absent evidence, ended agent turn, and tool error must lead to an explicit repair, retry, durable update, human interrupt, or completion transition. Do not leave a silent stop. Explain the next action concisely.`;
 
 type AgentName = "codex" | "claude";
 
@@ -36,6 +45,21 @@ interface ChatMessage {
   source?: AgentName;
 }
 
+interface ConversationSummary {
+  id: string;
+  title: string;
+  preview: string;
+  updatedAt: string | null;
+  messageCount: number;
+  active: boolean;
+}
+
+interface ConversationPayload {
+  activeConversationId: string;
+  messages: ChatMessage[];
+  conversations: ConversationSummary[];
+}
+
 interface AgentTestResult {
   verdict: "pass" | "risk" | "fail";
   agent: AgentName;
@@ -52,22 +76,39 @@ interface WiringTestStep {
 }
 
 type WiringTestStatus = "idle" | "running" | "passed" | "failed";
+type TestResolutionStatus = "idle" | "working" | "finished";
 
 const STATE_KIND_LABEL: Record<StateKind, string> = {
   observe: "Observe",
   decide: "Decide",
   act: "Act",
   evaluate: "Evaluate",
+  challenge: "Challenge completion",
   update: "Update state",
   interrupt: "Ask human",
-  terminal: "Complete",
+  terminal: "Accepted outcome",
 };
 
 const TRANSITION_KIND_LABEL: Record<TransitionKind, string> = {
   normal: "Continue",
   continue: "Loop back",
   interrupt: "Ask human",
-  complete: "Complete",
+  complete: "Accept outcome",
+};
+
+const COMPLETION_POLICY_LABEL: Record<CompletionPolicy, string> = {
+  confirm: "Human confirms candidate",
+  automatic: "Evidence can auto-accept",
+  continuous: "Continuous until interrupted",
+};
+
+const COMPLETION_POLICY_DESCRIPTION: Record<CompletionPolicy, string> = {
+  confirm:
+    "A fresh agent challenges the candidate, then a human accepts it or adds another thought.",
+  automatic:
+    "A fresh agent may accept only when declared evidence passes and no blocking gap remains.",
+  continuous:
+    "New findings return to the frontier; only a human, budget, or explicit boundary pauses the loop.",
 };
 
 function newMessage(
@@ -90,6 +131,17 @@ function splitLines(value: string) {
     .filter(Boolean);
 }
 
+function conversationTime(conversation: ConversationSummary) {
+  if (conversation.active) return "Current";
+  if (!conversation.updatedAt) return "Empty";
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(conversation.updatedAt));
+}
+
 function OverviewEditor({
   loop,
   disabled,
@@ -103,6 +155,8 @@ function OverviewEditor({
 }) {
   const [name, setName] = useState(loop.name);
   const [objective, setObjective] = useState(loop.objective);
+  const [completionPolicy, setCompletionPolicy] =
+    useState<CompletionPolicy>(loop.completionPolicy);
 
   return (
     <div className="inline-editor overview-editor">
@@ -118,6 +172,22 @@ function OverviewEditor({
           onChange={(event) => setObjective(event.target.value)}
         />
       </label>
+      <label>
+        Completion policy
+        <select
+          value={completionPolicy}
+          onChange={(event) =>
+            setCompletionPolicy(event.target.value as CompletionPolicy)
+          }
+        >
+          {Object.entries(COMPLETION_POLICY_LABEL).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <small>{COMPLETION_POLICY_DESCRIPTION[completionPolicy]}</small>
+      </label>
       <div className="editor-actions">
         <button className="button-secondary" onClick={onCancel} type="button">
           Cancel
@@ -126,7 +196,12 @@ function OverviewEditor({
           className="button-primary"
           disabled={disabled || !name.trim() || !objective.trim()}
           onClick={() =>
-            onSave({ ...loop, name: name.trim(), objective: objective.trim() })
+            onSave({
+              ...loop,
+              name: name.trim(),
+              objective: objective.trim(),
+              completionPolicy,
+            })
           }
           type="button"
         >
@@ -380,6 +455,10 @@ export function LoopStudio({
   const [health, setHealth] = useState<Health | null>(null);
   const [agent, setAgent] = useState<AgentName>("codex");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isConversationChanging, setIsConversationChanging] = useState(false);
   const [input, setInput] = useState("");
   const [isWorking, setIsWorking] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -394,6 +473,8 @@ export function LoopStudio({
   const [isAgentTesting, setIsAgentTesting] = useState(false);
   const [agentTestActivity, setAgentTestActivity] = useState("Ready");
   const [agentTest, setAgentTest] = useState<AgentTestResult | null>(null);
+  const [testResolutionStatus, setTestResolutionStatus] =
+    useState<TestResolutionStatus>("idle");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wiringTestRunRef = useRef(0);
 
@@ -403,6 +484,19 @@ export function LoopStudio({
   );
   const findings = useMemo(() => (loop ? validateLoop(loop) : []), [loop]);
   const blockingFindings = findings.filter((item) => item.severity === "error");
+  const conversationList = conversations ?? [];
+  const activeConversation = conversationList.find(
+    (conversation) => conversation.id === activeConversationId,
+  );
+
+  const applyConversationPayload = useCallback(
+    (payload: ConversationPayload) => {
+      setActiveConversationId(payload.activeConversationId ?? null);
+      setMessages(payload.messages ?? []);
+      setConversations(payload.conversations ?? []);
+    },
+    [],
+  );
 
   const refresh = useCallback(async () => {
     try {
@@ -427,10 +521,9 @@ export function LoopStudio({
         setParseError(null);
       }
       if (conversationResponse.ok) {
-        const payload = (await conversationResponse.json()) as {
-          messages: ChatMessage[];
-        };
-        setMessages(payload.messages);
+        applyConversationPayload(
+          (await conversationResponse.json()) as ConversationPayload,
+        );
       }
       if (testResponse.ok) {
         const payload = (await testResponse.json()) as {
@@ -441,7 +534,7 @@ export function LoopStudio({
     } catch {
       setActivity("Local bridge is offline");
     }
-  }, []);
+  }, [applyConversationPayload]);
 
   useEffect(() => {
     void refresh();
@@ -466,9 +559,77 @@ export function LoopStudio({
     });
   };
 
-  const sendMessage = async (textOverride?: string, displayText?: string) => {
+  const startNewConversation = async () => {
+    if (isWorking || isAgentTesting || isConversationChanging) return;
+    setIsConversationChanging(true);
+    try {
+      const response = await fetch(`${DAEMON_URL}/api/conversations/new`, {
+        method: "POST",
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Could not start a new conversation.");
+      applyConversationPayload(payload as ConversationPayload);
+      setInput("");
+      setSelectedStateId(null);
+      setIsHistoryOpen(false);
+      setActivity("Ready");
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        newMessage(
+          "error",
+          error instanceof Error ? error.message : "Could not start a new conversation.",
+        ),
+      ]);
+    } finally {
+      setIsConversationChanging(false);
+    }
+  };
+
+  const activateConversation = async (id: string) => {
+    if (
+      id === activeConversationId ||
+      isWorking ||
+      isAgentTesting ||
+      isConversationChanging
+    ) {
+      setIsHistoryOpen(false);
+      return;
+    }
+    setIsConversationChanging(true);
+    try {
+      const response = await fetch(`${DAEMON_URL}/api/conversations/activate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Could not open that conversation.");
+      applyConversationPayload(payload as ConversationPayload);
+      setInput("");
+      setSelectedStateId(null);
+      setIsHistoryOpen(false);
+      setActivity("Ready");
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        newMessage(
+          "error",
+          error instanceof Error ? error.message : "Could not open that conversation.",
+        ),
+      ]);
+    } finally {
+      setIsConversationChanging(false);
+    }
+  };
+
+  const sendMessage = async (
+    textOverride?: string,
+    displayText?: string,
+    allowDuringTest = false,
+  ) => {
     const text = (textOverride ?? input).trim();
-    if (!text || isWorking || isAgentTesting) return;
+    if (!text || isWorking || (isAgentTesting && !allowDuringTest)) return;
 
     const selectedAgent = health?.agents[agent];
     if (selectedAgent && !selectedAgent.installed) {
@@ -548,6 +709,12 @@ export function LoopStudio({
             setActivity(event.interrupted ? "Agent stopped" : "Ready");
           }
         }
+      }
+      const conversationResponse = await fetch(`${DAEMON_URL}/api/conversation`);
+      if (conversationResponse.ok) {
+        applyConversationPayload(
+          (await conversationResponse.json()) as ConversationPayload,
+        );
       }
     } catch (error) {
       setMessages((current) => [
@@ -743,6 +910,7 @@ export function LoopStudio({
 
   const runAgentTest = async () => {
     if (!loop || isWorking || isAgentTesting) return;
+    setTestResolutionStatus("idle");
     setIsAgentTesting(true);
     setAgentTestActivity(
       `Starting a fresh, read-only ${agent === "codex" ? "Codex" : "Claude"} rehearsal`,
@@ -762,6 +930,7 @@ export function LoopStudio({
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let resultForResolution: AgentTestResult | null = null;
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -778,7 +947,8 @@ export function LoopStudio({
             setAgentTestActivity(event.text);
           }
           if (event.type === "test_report") {
-            setAgentTest(event.result as AgentTestResult);
+            resultForResolution = event.result as AgentTestResult;
+            setAgentTest(resultForResolution);
           }
           if (event.type === "error") {
             setMessages((current) => [
@@ -791,6 +961,21 @@ export function LoopStudio({
             setAgentTestActivity(event.interrupted ? "Rehearsal stopped" : "Ready");
           }
         }
+      }
+
+      if (resultForResolution && resultForResolution.verdict !== "pass") {
+        setIsAgentTesting(false);
+        setTestResolutionStatus("working");
+        setAgentTestActivity(
+          "Resolving agent-owned gaps; human-owned gaps will become one question",
+        );
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
+        await sendMessage(
+          RESOLVE_TEST_FAILURE,
+          "Continue from the failed preflight",
+          true,
+        );
+        setTestResolutionStatus("finished");
       }
     } catch (error) {
       const text =
@@ -837,23 +1022,77 @@ export function LoopStudio({
           <div className="panel-heading">
             <div>
               <span className="eyebrow">Conversation</span>
-              <h1>Build with your agent</h1>
+              <h1>{activeConversation?.title ?? "New conversation"}</h1>
             </div>
-            <div className="agent-switcher" aria-label="Choose local agent">
-              {(["codex", "claude"] as AgentName[]).map((name) => (
+            <div className="panel-heading-actions">
+              <div className="conversation-actions">
                 <button
-                  className={agent === name ? "is-active" : ""}
-                  disabled={health ? !health.agents[name].installed : false}
-                  key={name}
-                  onClick={() => setAgent(name)}
-                  title={health?.agents[name].version ?? `${name} is not installed`}
+                  disabled={isWorking || isAgentTesting || isConversationChanging}
+                  onClick={() => void startNewConversation()}
                   type="button"
                 >
-                  {name === "codex" ? "Codex" : "Claude"}
+                  + New
                 </button>
-              ))}
+                <button
+                  aria-expanded={isHistoryOpen}
+                  disabled={isWorking || isAgentTesting}
+                  onClick={() => setIsHistoryOpen((current) => !current)}
+                  type="button"
+                >
+                  History {conversationList.length > 1 ? `(${conversationList.length})` : ""}
+                </button>
+              </div>
+              <div className="agent-switcher" aria-label="Choose local agent">
+                {(["codex", "claude"] as AgentName[]).map((name) => (
+                  <button
+                    className={agent === name ? "is-active" : ""}
+                    disabled={health ? !health.agents[name].installed : false}
+                    key={name}
+                    onClick={() => setAgent(name)}
+                    title={health?.agents[name].version ?? `${name} is not installed`}
+                    type="button"
+                  >
+                    {name === "codex" ? "Codex" : "Claude"}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
+
+          {isHistoryOpen && (
+            <section className="conversation-history" aria-label="Past conversations">
+              <div className="conversation-history-heading">
+                <div>
+                  <span className="eyebrow">Local history</span>
+                  <strong>Conversations</strong>
+                </div>
+                <button
+                  aria-label="Close conversation history"
+                  onClick={() => setIsHistoryOpen(false)}
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="conversation-history-list">
+                {conversationList.map((conversation) => (
+                  <button
+                    className={conversation.active ? "is-active" : ""}
+                    key={conversation.id}
+                    onClick={() => void activateConversation(conversation.id)}
+                    type="button"
+                  >
+                    <span>
+                      <strong>{conversation.title}</strong>
+                      <small>{conversation.preview}</small>
+                    </span>
+                    <em>{conversationTime(conversation)}</em>
+                  </button>
+                ))}
+              </div>
+              <p>Each conversation keeps its own local agent session.</p>
+            </section>
+          )}
 
           <div className="chat-messages" aria-live="polite">
             {messages.length === 0 && (
@@ -993,7 +1232,7 @@ export function LoopStudio({
                     onClick={() => setEditing("overview")}
                     type="button"
                   >
-                    Edit objective
+                    Edit overview
                   </button>
                 </div>
                 {editing === "overview" ? (
@@ -1001,11 +1240,18 @@ export function LoopStudio({
                     disabled={isSaving}
                     loop={loop}
                     onCancel={() => setEditing(null)}
-                    onSave={(next) => void persistLoop(next, "Updated the loop objective.")}
+                    onSave={(next) => void persistLoop(next, "Updated the loop overview.")}
                   />
                 ) : (
                   <p className="objective-copy">{loop.objective}</p>
                 )}
+                <div className="completion-policy-card">
+                  <span>Completion policy</span>
+                  <div>
+                    <strong>{COMPLETION_POLICY_LABEL[loop.completionPolicy]}</strong>
+                    <p>{COMPLETION_POLICY_DESCRIPTION[loop.completionPolicy]}</p>
+                  </div>
+                </div>
                 <div className={`simple-health ${blockingFindings.length ? "has-errors" : "is-good"}`}>
                   <strong>
                     {blockingFindings.length
@@ -1045,7 +1291,8 @@ export function LoopStudio({
                       <h4>Prove the loop before real work</h4>
                       <p>
                         First trace every declared transition. Then let a fresh,
-                        read-only agent challenge the state contracts and edge cases.
+                        read-only agent challenge the state contracts. Any problem
+                        automatically becomes the next construction action.
                       </p>
                     </div>
                     <div className="test-lab-actions">
@@ -1080,12 +1327,14 @@ export function LoopStudio({
                     </div>
                   </div>
 
-                  {wiringTestStatus === "idle" && !isAgentTesting && (
+                  {wiringTestStatus === "idle" &&
+                    !isAgentTesting &&
+                    testResolutionStatus === "idle" && (
                     <div className="test-explanation">
                       <span>1</span>
                       <p><strong>Wiring test</strong> takes seconds and animates the recurrence, branches, interrupts, and completion exits.</p>
                       <span>2</span>
-                      <p><strong>Agent rehearsal</strong> starts without chat history and writes a Markdown risk report without changing the project.</p>
+                      <p><strong>Agent rehearsal</strong> starts without chat history. Agent-owned gaps are repaired; human-owned gaps become one question.</p>
                     </div>
                   )}
 
@@ -1154,10 +1403,43 @@ export function LoopStudio({
                     </div>
                   )}
 
+                  {testResolutionStatus === "working" && (
+                    <div className="agent-test-running is-resolution">
+                      <span className="pulse-dot" />
+                      <div>
+                        <strong>Failure became the next action</strong>
+                        <p>
+                          The construction agent is resolving what it owns. If
+                          intent, permission, or policy is missing, it will ask one
+                          focused question in chat.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {testResolutionStatus === "finished" && (
+                    <div className="test-next-action">
+                      <span aria-hidden="true">→</span>
+                      <div>
+                        <strong>The next action was initiated</strong>
+                        <p>
+                          Retest the updated revision, or answer the agent’s question
+                          in chat if the remaining gap belongs to you.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
                   {agentTest && !isAgentTesting && (
                     <details className={`agent-test-result is-${agentTest.verdict}`} open>
                       <summary>
-                        <span>{agentTest.verdict.toUpperCase()}</span>
+                        <span>
+                          {agentTest.verdict === "pass"
+                            ? "PASS"
+                            : agentTest.verdict === "risk"
+                              ? "NEEDS INPUT"
+                              : "REPAIR"}
+                        </span>
                         <div>
                           <strong>Fresh-agent rehearsal</strong>
                           <small>
@@ -1209,7 +1491,7 @@ export function LoopStudio({
                                 <h4>{state.name}</h4>
                                 <p>{state.summary}</p>
                                 <div className="done-when">
-                                  <span>Done when</span>
+                                  <span>State exits when</span>
                                   {state.completion}
                                 </div>
                                 {hasChoice && (

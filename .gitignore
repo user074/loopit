@@ -268,5 +268,6 @@ next-env.d.ts
 # Loopit runtime state (the loop definition itself stays versioned)
 /.loopit/session.json
 /.loopit/conversation.md
+/.loopit/conversations/
 /.loopit/test-report.md
 /.loopit/runtime/
