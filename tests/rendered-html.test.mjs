@@ -71,6 +71,11 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.match(studio, /FLOW_ZOOM_LABEL/);
   assert.match(studio, /FLOW_ZOOM_DESCRIPTION/);
   assert.match(studio, /Recurring project loop/);
+  assert.match(studio, /StartingPackagePanel/);
+  assert.match(studio, /Before the loop starts/);
+  assert.match(studio, /First work enters step 1/);
+  assert.match(studio, /StartingPackageEditor/);
+  assert.match(studio, /Ask agent to propose it/);
   assert.match(studio, /Result package/);
   assert.match(studio, /Runtime safeguards/);
   assert.match(studio, /No named artifact handoff/);
@@ -82,5 +87,9 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.match(
     studio,
     /zoom > 0[\s\S]*handoffSummary\(handoff\)[\s\S]*zoom === 2[\s\S]*handoffRole\(state\)/,
+  );
+  assert.match(
+    studio,
+    /zoom > 0[\s\S]*item\.description[\s\S]*zoom === 2[\s\S]*item\.initialContents/,
   );
 });

@@ -41,6 +41,20 @@ export interface LoopArtifact {
   description: string;
 }
 
+export type StartingPackageRole =
+  | "state"
+  | "frontier"
+  | "foundation"
+  | "first-work";
+
+export interface StartingPackageItem {
+  id: string;
+  name: string;
+  role: StartingPackageRole;
+  description: string;
+  initialContents: string[];
+}
+
 export interface LoopBoundary {
   id: string;
   name: string;
@@ -56,6 +70,7 @@ export interface LoopDefinition {
   status: "draft" | "confirmed";
   completionPolicy: CompletionPolicy;
   startState: string;
+  startingPackage: StartingPackageItem[];
   artifacts: LoopArtifact[];
   boundaries: LoopBoundary[];
   states: LoopState[];

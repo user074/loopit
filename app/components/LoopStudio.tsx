@@ -6,6 +6,8 @@ import type {
   LoopDefinition,
   LoopState,
   LoopTransition,
+  StartingPackageItem,
+  StartingPackageRole,
   StateKind,
   TransitionKind,
 } from "@/lib/loop-types";
@@ -15,11 +17,11 @@ import { validateLoop } from "@/lib/loop-validation";
 
 const DAEMON_URL = "http://127.0.0.1:4318";
 const START_CONSTRUCTION =
-  "Begin first-time loop construction. No loop exists yet. Ask me one focused question about what work I want to keep progressing before proposing any states.";
+  "Begin first-time loop construction. No loop exists yet. Ask me one focused question about what work I want to keep progressing. Then propose a domain-specific Starting Package—evidence-backed state, initial objective frontier, working foundation, and first executable work item—before proposing any recurring states.";
 const RESOLVE_TEST_FAILURE = `The latest .loopit/test-report.md found unresolved preflight issues. Treat this result as the next construction action, never as a reason to stop.
 
 Read both .loopit/loop.md and .loopit/test-report.md. Classify every issue by ownership:
-- Agent-owned: missing domain handoff, unclear native deliverable, incomplete Result package, inconsistent artifact ownership, or state integration logic that an agent can define safely. Resolve these now by making the smallest coherent update to loop.md.
+- Agent-owned: missing or generic Starting Package, missing domain handoff, unclear native deliverable, incomplete Result package, inconsistent artifact ownership, or state integration logic that an agent can define safely. Resolve these now by making the smallest coherent update to loop.md.
 - Human-owned: product intent, acceptance threshold, permission, credential, sensitive fact, risk choice, or policy that the agent must not invent. After resolving agent-owned issues, ask exactly one focused question for the highest-leverage missing human input.
 - Runtime evidence: behavior that only a later sandbox execution can prove. Define how the Result package will carry the observed evidence; do not claim it already passed.
 
@@ -123,6 +125,20 @@ const COMPLETION_POLICY_DESCRIPTION: Record<CompletionPolicy, string> = {
     "A fresh agent may accept only when declared evidence passes and no blocking gap remains.",
   continuous:
     "New findings return to the frontier; only a human, budget, or explicit boundary pauses the loop.",
+};
+
+const STARTING_PACKAGE_ORDER: StartingPackageRole[] = [
+  "state",
+  "frontier",
+  "foundation",
+  "first-work",
+];
+
+const STARTING_PACKAGE_ROLE_LABEL: Record<StartingPackageRole, string> = {
+  state: "Evidence-backed state",
+  frontier: "Initial frontier",
+  foundation: "Working foundation",
+  "first-work": "First work item",
 };
 
 function newMessage(
@@ -233,6 +249,181 @@ function OverviewEditor({
         </button>
       </div>
     </div>
+  );
+}
+
+function StartingPackageEditor({
+  items,
+  disabled,
+  onCancel,
+  onSave,
+}: {
+  items: StartingPackageItem[];
+  disabled: boolean;
+  onCancel: () => void;
+  onSave: (items: StartingPackageItem[]) => void;
+}) {
+  const [draft, setDraft] = useState(() => structuredClone(items ?? []));
+
+  const updateItem = (
+    role: StartingPackageRole,
+    update: Partial<StartingPackageItem>,
+  ) => {
+    setDraft((current) =>
+      current.map((item) =>
+        item.role === role ? { ...item, ...update } : item,
+      ),
+    );
+  };
+
+  const ordered = STARTING_PACKAGE_ORDER.map((role) =>
+    draft.find((item) => item.role === role),
+  ).filter(Boolean) as StartingPackageItem[];
+  const canSave =
+    ordered.length === STARTING_PACKAGE_ORDER.length &&
+    ordered.every(
+      (item) =>
+        item.name.trim() &&
+        item.description.trim() &&
+        item.initialContents.length > 0,
+    );
+
+  return (
+    <div className="inline-editor starting-package-editor">
+      {ordered.map((item) => (
+        <section key={item.role}>
+          <span>{STARTING_PACKAGE_ROLE_LABEL[item.role]}</span>
+          <label>
+            Domain-specific name
+            <input
+              onChange={(event) =>
+                updateItem(item.role, { name: event.target.value })
+              }
+              value={item.name}
+            />
+          </label>
+          <label>
+            Purpose
+            <textarea
+              onChange={(event) =>
+                updateItem(item.role, { description: event.target.value })
+              }
+              rows={3}
+              value={item.description}
+            />
+          </label>
+          <label>
+            Proposed initial contents
+            <textarea
+              onChange={(event) =>
+                updateItem(item.role, {
+                  initialContents: splitLines(event.target.value),
+                })
+              }
+              rows={4}
+              value={item.initialContents.join("\n")}
+            />
+          </label>
+        </section>
+      ))}
+      <div className="editor-actions">
+        <button className="button-secondary" onClick={onCancel} type="button">
+          Cancel
+        </button>
+        <button
+          className="button-primary"
+          disabled={disabled || !canSave}
+          onClick={() => onSave(ordered)}
+          type="button"
+        >
+          Save starting package
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function StartingPackagePanel({
+  items,
+  zoom,
+  disabled,
+  editing,
+  onEdit,
+  onPropose,
+  onCancel,
+  onSave,
+}: {
+  items: StartingPackageItem[];
+  zoom: FlowZoom;
+  disabled: boolean;
+  editing: boolean;
+  onEdit: () => void;
+  onPropose: () => void;
+  onCancel: () => void;
+  onSave: (items: StartingPackageItem[]) => void;
+}) {
+  const safeItems = items ?? [];
+  const ordered = STARTING_PACKAGE_ORDER.map((role) =>
+    safeItems.find((item) => item.role === role),
+  ).filter(Boolean) as StartingPackageItem[];
+  const isComplete = ordered.length === STARTING_PACKAGE_ORDER.length;
+
+  return (
+    <section className={`starting-package starting-package-level-${zoom}`}>
+      <div className="starting-package-heading">
+        <div>
+          <span className="eyebrow">Before the loop starts</span>
+          <h3>Starting package</h3>
+          <p>The agent proposes this from the objective and work function.</p>
+        </div>
+        {!editing && (
+          <button
+            className="button-secondary"
+            disabled={disabled}
+            onClick={isComplete ? onEdit : onPropose}
+            type="button"
+          >
+            {isComplete ? "Edit starting package" : "Ask agent to propose it"}
+          </button>
+        )}
+      </div>
+
+      {editing ? (
+        <StartingPackageEditor
+          disabled={disabled}
+          items={safeItems}
+          onCancel={onCancel}
+          onSave={onSave}
+        />
+      ) : isComplete ? (
+        <>
+          <div className="starting-package-grid">
+            {ordered.map((item) => (
+              <article key={item.role}>
+                <span>{STARTING_PACKAGE_ROLE_LABEL[item.role]}</span>
+                <strong>{item.name}</strong>
+                {zoom > 0 && <p>{item.description}</p>}
+                {zoom === 2 && (
+                  <ul>
+                    {item.initialContents.map((content) => (
+                      <li key={content}>{content}</li>
+                    ))}
+                  </ul>
+                )}
+              </article>
+            ))}
+          </div>
+          <div className="starting-package-to-loop">
+            <span aria-hidden="true">↓</span>
+            <strong>First work enters step 1</strong>
+          </div>
+        </>
+      ) : (
+        <div className="starting-package-missing">
+          The agent has not proposed all four starting components yet.
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -1614,6 +1805,30 @@ export function LoopStudio({
               </div>
 
               <section className="sequence-section">
+                <StartingPackagePanel
+                  disabled={isSaving || isWorking || isAgentTesting}
+                  editing={editing === "starting-package"}
+                  items={loop.startingPackage}
+                  onCancel={() => setEditing(null)}
+                  onEdit={() => {
+                    setFlowZoom(2);
+                    setEditing("starting-package");
+                  }}
+                  onPropose={() =>
+                    void sendMessage(
+                      "Propose and add the missing Starting Package for this existing loop. Use exactly one domain-specific evidence-backed state, objective-grounded initial frontier, minimal working foundation, and first executable work item. Infer them from the objective, repository, and work function; do not ask me to invent raw methodology or infrastructure unless a cost, authority, risk, or material direction is genuinely mine to decide.",
+                      "Ask the agent to propose the starting package",
+                    )
+                  }
+                  onSave={(items) =>
+                    void persistLoop(
+                      { ...loop, startingPackage: items },
+                      "Updated the starting package.",
+                    )
+                  }
+                  zoom={flowZoom}
+                />
+
                 <StateFlowCanvas
                   currentWiringStep={currentWiringStep}
                   disabled={isSaving || isWorking || isAgentTesting}

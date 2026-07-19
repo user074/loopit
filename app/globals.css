@@ -710,6 +710,116 @@ p {
   padding: 23px;
 }
 
+.starting-package {
+  margin-bottom: 23px;
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--line);
+}
+
+.starting-package-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 15px;
+}
+
+.starting-package-heading h3 {
+  margin: 2px 0 0;
+  font-size: 19px;
+}
+
+.starting-package-heading p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.starting-package-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.starting-package-grid article {
+  min-width: 0;
+  padding: 11px 12px;
+  border-left: 2px solid #aabbb0;
+  background: var(--soft);
+}
+
+.starting-package-grid article > span,
+.starting-package-editor section > span {
+  display: block;
+  margin-bottom: 4px;
+  color: #6b766f;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.starting-package-grid strong {
+  display: block;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.starting-package-grid p,
+.starting-package-grid ul {
+  margin: 6px 0 0;
+  color: #59635e;
+  font-size: 10px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.starting-package-grid ul {
+  padding-left: 16px;
+}
+
+.starting-package-to-loop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding-top: 12px;
+  color: #4e6f5b;
+  font-size: 10px;
+}
+
+.starting-package-to-loop > span {
+  font-size: 16px;
+  line-height: 1;
+}
+
+.starting-package-missing {
+  padding: 13px;
+  border: 1px dashed #c5aaa2;
+  border-radius: 9px;
+  background: var(--amber-soft);
+  color: #765026;
+  font-size: 11px;
+}
+
+.starting-package-editor {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.starting-package-editor section {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: white;
+}
+
+.starting-package-editor .editor-actions {
+  grid-column: 1 / -1;
+}
+
 .flow-toolbar {
   display: flex;
   align-items: flex-start;
@@ -2000,12 +2110,15 @@ p {
 
   .panel-heading,
   .loop-overview-heading,
+  .starting-package-heading,
   .simple-health {
     align-items: flex-start;
     flex-direction: column;
   }
 
   .loop-overview-status,
+  .starting-package-grid,
+  .starting-package-editor,
   .flow-contract,
   .flow-runtime-policies > div {
     grid-template-columns: 1fr;

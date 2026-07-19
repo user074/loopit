@@ -12,6 +12,48 @@ start: observe-work
 
 Keep useful work moving while making evidence and stopping conditions explicit.
 
+## Starting Package
+
+### Evidence-backed work state
+
+**ID:** `work-evidence-state`
+**Role:** `state`
+**Description:** Inspectable claims about current progress, supporting evidence, counterevidence, assumptions, and unresolved uncertainty.
+
+#### Initial Contents
+
+- The objective exists but has not yet been supported by execution evidence.
+
+### Objective gap frontier
+
+**ID:** `objective-gap-frontier`
+**Role:** `frontier`
+**Description:** Initial unresolved items derived by comparing the objective with the evidence-backed work state.
+
+#### Initial Contents
+
+- Establish the first observable result that can update the work state.
+
+### Working foundation
+
+**ID:** `working-foundation`
+**Role:** `foundation`
+**Description:** The minimal tools, durable workspace, evidence format, and authority needed to perform and inspect the first item.
+
+#### Initial Contents
+
+- Use the local workspace and record evidence in durable Markdown.
+
+### First evidence-producing item
+
+**ID:** `first-work-item`
+**Role:** `first-work`
+**Description:** The first bounded item selected from the objective gap frontier and ready for the start state.
+
+#### Initial Contents
+
+- Inspect current durable state and select one objective-backed unresolved item.
+
 ## Artifacts
 
 ### Loop definition

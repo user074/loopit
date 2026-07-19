@@ -34,3 +34,18 @@ test("rehearsal exhausts the frontier and rejects ungrounded continuation", () =
   assert.match(daemon, /Exhaust the current frontier in rehearsal/);
   assert.match(daemon, /stops merely because its initial list is empty/);
 });
+
+test("construction proposes a generalized domain-specific starting package", () => {
+  assert.match(daemon, /Propose a Starting Package before declaring the loop ready/);
+  assert.match(daemon, /state: the evidence-backed model/);
+  assert.match(daemon, /frontier: initial objective-backed/);
+  assert.match(daemon, /foundation: the minimal apparatus, tools, data, access, authority/);
+  assert.match(daemon, /first-work: one bounded, executable item/);
+  assert.match(daemon, /Do not assume software, cloud, or code/);
+});
+
+test("rehearsal verifies that the starting package can actually begin", () => {
+  assert.match(daemon, /Inspect the Starting Package before tracing the cycle/);
+  assert.match(daemon, /first work is drawn from the frontier/);
+  assert.match(daemon, /pushing raw methodology, tool, infrastructure, or architecture selection onto a nonexpert/);
+});

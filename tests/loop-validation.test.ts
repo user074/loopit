@@ -38,6 +38,15 @@ test("the Markdown parser rejects invalid machine-critical fields", () => {
     "completion-policy: hopeful",
   );
   assert.throws(() => parseLoopMarkdown(malformedPolicy), /must be one of/);
+
+  const malformedStartingRole = loopSource.replace(
+    "**Role:** `state`",
+    "**Role:** `assumption`",
+  );
+  assert.throws(
+    () => parseLoopMarkdown(malformedStartingRole),
+    /Starting package .* role must be one of/,
+  );
 });
 
 test("legacy Markdown defaults to human-confirmed completion", () => {
@@ -52,10 +61,39 @@ test("visual edits round-trip through Markdown without losing the loop", () => {
 
 test("Markdown is the only durable loop definition", async () => {
   assert.equal(loop.schemaVersion, 1);
+  assert.equal(loop.startingPackage.length, 4);
   assert.equal(loop.states.length, 7);
   await assert.rejects(
     readFile(new URL("../.loopit/loop.json", import.meta.url), "utf8"),
     { code: "ENOENT" },
+  );
+});
+
+test("validation requires one complete component for every starting role", () => {
+  const missing = structuredClone(loop);
+  missing.startingPackage = missing.startingPackage.filter(
+    (item) => item.role !== "foundation",
+  );
+  assert.ok(
+    validateLoop(missing).some(
+      (finding) =>
+        finding.id === "starting-package-shape" &&
+        finding.severity === "error",
+    ),
+  );
+
+  const empty = structuredClone(loop);
+  const firstWork = empty.startingPackage.find(
+    (item) => item.role === "first-work",
+  );
+  assert.ok(firstWork);
+  firstWork.initialContents = [];
+  assert.ok(
+    validateLoop(empty).some(
+      (finding) =>
+        finding.id === "starting-package-content" &&
+        finding.severity === "error",
+    ),
   );
 });
 

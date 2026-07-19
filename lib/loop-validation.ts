@@ -5,6 +5,13 @@ import type {
 } from "./loop-types";
 import { primarySequence, stateHandoff } from "./loop-flow.ts";
 
+const STARTING_PACKAGE_ROLES = [
+  "state",
+  "frontier",
+  "foundation",
+  "first-work",
+] as const;
+
 function finding(
   id: string,
   severity: ValidationFinding["severity"],
@@ -77,6 +84,75 @@ function canReachTransitionKind(
 
 export function validateLoop(loop: LoopDefinition): ValidationFinding[] {
   const findings: ValidationFinding[] = [];
+  const startingPackage = loop.startingPackage ?? [];
+  const startingIds = startingPackage.map((item) => item.id);
+  const duplicateStartingIds = startingIds.filter(
+    (id, index) => startingIds.indexOf(id) !== index,
+  );
+  const roleCounts = new Map(
+    STARTING_PACKAGE_ROLES.map((role) => [
+      role,
+      startingPackage.filter((item) => item.role === role).length,
+    ]),
+  );
+  const missingStartingRoles = STARTING_PACKAGE_ROLES.filter(
+    (role) => roleCounts.get(role) === 0,
+  );
+  const duplicateStartingRoles = STARTING_PACKAGE_ROLES.filter(
+    (role) => (roleCounts.get(role) ?? 0) > 1,
+  );
+
+  if (
+    missingStartingRoles.length ||
+    duplicateStartingRoles.length ||
+    duplicateStartingIds.length
+  ) {
+    const problems = [
+      missingStartingRoles.length
+        ? `missing roles: ${missingStartingRoles.join(", ")}`
+        : "",
+      duplicateStartingRoles.length
+        ? `duplicate roles: ${duplicateStartingRoles.join(", ")}`
+        : "",
+      duplicateStartingIds.length
+        ? `duplicate IDs: ${[...new Set(duplicateStartingIds)].join(", ")}`
+        : "",
+    ].filter(Boolean);
+    findings.push(
+      finding(
+        "starting-package-shape",
+        "error",
+        "The starting package is incomplete",
+        `Provide exactly one domain-named state model, initial frontier, working foundation, and first work item (${problems.join("; ")}).`,
+      ),
+    );
+  } else if (
+    startingPackage.some(
+      (item) =>
+        !item.name.trim() ||
+        !item.description.trim() ||
+        item.initialContents.length === 0,
+    )
+  ) {
+    findings.push(
+      finding(
+        "starting-package-content",
+        "error",
+        "The starting package has an empty component",
+        "Every component needs a domain-specific name, a purpose, and at least one proposed initial item so the first iteration can begin.",
+      ),
+    );
+  } else {
+    findings.push(
+      finding(
+        "starting-package-ready",
+        "pass",
+        "A complete starting package is proposed",
+        "The loop begins with an evidence-backed state model, objective-grounded frontier, working foundation, and first executable work item.",
+      ),
+    );
+  }
+
   const stateIds = loop.states.map((state) => state.id);
   const stateMap = new Map(loop.states.map((state) => [state.id, state]));
   const duplicateIds = stateIds.filter(
