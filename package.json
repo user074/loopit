@@ -1,0 +1,32 @@
+{
+  "name": "loopit",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:web": "next dev -p 3000",
+    "dev:daemon": "node scripts/loopit-daemon.mjs",
+    "build": "next build",
+    "start": "next start",
+    "test": "npm run build && node --test tests/rendered-html.test.mjs tests/loop-validation.test.ts",
+    "lint": "eslint app lib scripts tests next.config.ts"
+  },
+  "dependencies": {
+    "@xyflow/react": "^12.11.2",
+    "next": "16.2.6",
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.2.6",
+    "typescript": "5.9.3"
+  },
+  "type": "module"
+}

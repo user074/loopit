@@ -4,7 +4,37 @@
 
 Loopit is a control plane for continuing agent work. It helps a person turn an objective into a durable, testable loop that can keep making meaningful progress for 24 hours or longer, then makes that loop understandable, steerable, and easy to improve.
 
-> **Project status:** early north-star and product exploration.
+> **Project status:** first local construction-studio MVP.
+
+## Try the construction MVP
+
+This version focuses only on the first product problem: working with an agent to construct a loop that can actually continue. It does not execute or monitor long-running work yet.
+
+The screen has two connected parts:
+
+- **Construction chat** launches the Codex or Claude Code CLI already installed and authenticated on the local machine. The construction agent can inspect the project, but it is restricted to creating or updating `.loopit/loop.md`.
+- **Loop inspector** parses that Markdown into selectable states and guarded relations. Selecting a node or relation shows its reads, work instruction, writes, completion condition, and next transition. Deterministic checks flag unreachable states, dead ends, dangling transitions, missing continuation cycles, and cycles that fail to evaluate evidence or update durable state.
+
+Requirements: Node.js 22.13 or newer and at least one locally authenticated agent CLI (`codex` or `claude`). No separate API key or hosted Loopit account is used.
+
+```bash
+npm install
+npm run dev
+```
+
+Then open [http://localhost:3000](http://localhost:3000). The web process and localhost-only agent daemon start together. Construction-agent sessions are remembered in `.loopit/session.json`; the proposed loop itself remains inspectable and versionable at `.loopit/loop.md`.
+
+Markdown is the durable agent-facing source of truth, not the primary human interface. Loopit parses it into an internal graph for deterministic checks and presents the understandable, interactive version in the web UI. No generated JSON copy is committed or maintained.
+
+See the [local runbook](RUNBOOK.md) for verification, stopping the current agent turn, stopping both Loopit processes, and recovering when the original terminal is gone.
+
+Loopit inherits the selected CLI's local model configuration. If an older Codex CLI cannot use its configured model, either update it with `codex update` or temporarily select a compatible model for Loopit:
+
+```bash
+LOOPIT_CODEX_MODEL=gpt-5.5 npm run dev
+```
+
+The seed proposal intentionally uses one small repair cycle—**Validate the loop → Revise durable state → Validate the loop**—plus explicit human-interrupt and completion exits. It is a construction loop for dogfooding Loopit itself, not a claim that every domain needs the same states.
 
 ## North star
 
