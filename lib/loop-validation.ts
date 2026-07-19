@@ -3,7 +3,7 @@ import type {
   LoopState,
   ValidationFinding,
 } from "./loop-types";
-import { primarySequence } from "./loop-flow.ts";
+import { primarySequence, stateHandoff } from "./loop-flow.ts";
 
 function finding(
   id: string,
@@ -191,6 +191,66 @@ export function validateLoop(loop: LoopDefinition): ValidationFinding[] {
   }
 
   const sequence = primarySequence(loop);
+  const primaryLinks = [
+    ...sequence.links,
+    ...(sequence.loopBack ? [sequence.loopBack] : []),
+  ];
+
+  for (const link of primaryLinks) {
+    const source = stateMap.get(link.sourceId);
+    const target = stateMap.get(link.targetId);
+    if (source && target && stateHandoff(source, target).length === 0) {
+      findings.push(
+        finding(
+          `missing-handoff-${link.transition.id}`,
+          "warning",
+          `${source.name} does not name its handoff`,
+          `Its usual next state, “${target.name}”, does not read any artifact that this state writes. Use the same artifact name on both sides so a fresh agent can follow the work.`,
+          source.id,
+        ),
+      );
+    }
+  }
+
+  const chosenTransitionIds = sequence.chosenTransitionIds;
+  const recoverySourcesByTarget = new Map<string, Set<string>>();
+  for (const state of loop.states) {
+    for (const transition of state.transitions) {
+      if (
+        transition.to === state.id ||
+        chosenTransitionIds.has(transition.id) ||
+        !/absent|corrupt|fail|incomplete|interrupt|invalid|missing|partial|recover|tool error/i.test(
+          transition.when,
+        )
+      ) {
+        continue;
+      }
+      const sources = recoverySourcesByTarget.get(transition.to) ?? new Set();
+      sources.add(state.id);
+      recoverySourcesByTarget.set(transition.to, sources);
+    }
+  }
+  for (const [targetId, sources] of recoverySourcesByTarget) {
+    const target = stateMap.get(targetId);
+    if (
+      target &&
+      sources.size >= 3 &&
+      target.kind !== "interrupt" &&
+      target.kind !== "terminal" &&
+      target.kind !== "challenge"
+    ) {
+      findings.push(
+        finding(
+          `shared-fallback-${targetId}`,
+          "warning",
+          `Many recovery paths converge on ${target.name}`,
+          `${sources.size} states use this as a recovery destination. Keep its contract narrow: repair durable records and resume their owning state without taking over ordinary pipeline outputs.`,
+          targetId,
+        ),
+      );
+    }
+  }
+
   const cycle = sequence.loopBack
     ? [
         ...sequence.states

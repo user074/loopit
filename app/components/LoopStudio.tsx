@@ -9,7 +9,8 @@ import type {
   StateKind,
   TransitionKind,
 } from "@/lib/loop-types";
-import { primarySequence } from "@/lib/loop-flow";
+import { primarySequence, stateHandoff } from "@/lib/loop-flow";
+import type { PrimarySequence } from "@/lib/loop-flow";
 import { validateLoop } from "@/lib/loop-validation";
 
 const DAEMON_URL = "http://127.0.0.1:4318";
@@ -77,6 +78,13 @@ interface WiringTestStep {
 
 type WiringTestStatus = "idle" | "running" | "passed" | "failed";
 type TestResolutionStatus = "idle" | "working" | "finished";
+type FlowZoom = 0 | 1 | 2;
+
+const FLOW_ZOOM_LABEL: Record<FlowZoom, string> = {
+  0: "Map",
+  1: "Decisions",
+  2: "Details",
+};
 
 const STATE_KIND_LABEL: Record<StateKind, string> = {
   observe: "Observe",
@@ -129,6 +137,16 @@ function splitLines(value: string) {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+function handoffSummary(items: string[]) {
+  if (!items.length) return "No named artifact handoff";
+  const productArtifacts = items.filter(
+    (item) => !/checkpoint|recovery record/i.test(item),
+  );
+  const visible = productArtifacts.length ? productArtifacts : items;
+  if (visible.length <= 2) return visible.join(" + ");
+  return `${visible.slice(0, 2).join(" + ")} +${visible.length - 2}`;
 }
 
 function conversationTime(conversation: ConversationSummary) {
@@ -444,6 +462,342 @@ function StateEditor({
   );
 }
 
+function StateFlowCanvas({
+  loop,
+  sequence,
+  zoom,
+  focusedStateId,
+  editing,
+  disabled,
+  currentWiringStep,
+  testedTransitionIds,
+  onZoomChange,
+  onFocus,
+  onEdit,
+  onDiscuss,
+  onSave,
+  onCancelEdit,
+  onAddStep,
+}: {
+  loop: LoopDefinition;
+  sequence: PrimarySequence;
+  zoom: FlowZoom;
+  focusedStateId: string | null;
+  editing: "overview" | string | null;
+  disabled: boolean;
+  currentWiringStep: WiringTestStep | null;
+  testedTransitionIds: string[];
+  onZoomChange: (zoom: FlowZoom) => void;
+  onFocus: (stateId: string) => void;
+  onEdit: (stateId: string) => void;
+  onDiscuss: (stateId: string) => void;
+  onSave: (state: LoopState) => void;
+  onCancelEdit: () => void;
+  onAddStep: () => void;
+}) {
+  const stateById = new Map(loop.states.map((state) => [state.id, state]));
+  const sequenceIds = new Set(sequence.states.map((state) => state.id));
+  const otherStates = loop.states.filter((state) => !sequenceIds.has(state.id));
+  const focusedState =
+    loop.states.find((state) => state.id === focusedStateId) ??
+    sequence.states[0] ??
+    loop.states[0];
+
+  const changeZoom = (direction: -1 | 1) => {
+    onZoomChange(Math.max(0, Math.min(2, zoom + direction)) as FlowZoom);
+  };
+
+  const describeTarget = (transition: LoopTransition) =>
+    stateById.get(transition.to)?.name ?? transition.to;
+
+  const describeHandoff = (source: LoopState, targetId: string) => {
+    const target = stateById.get(targetId);
+    return target ? stateHandoff(source, target) : [];
+  };
+
+  return (
+    <>
+      <div className="flow-toolbar">
+        <div>
+          <span className="eyebrow">State flow</span>
+          <h3>One handoff pipeline, with decisions beside it</h3>
+        </div>
+        <div className="flow-zoom" aria-label="Change flow detail level">
+          <button
+            aria-label="Zoom out"
+            disabled={zoom === 0}
+            onClick={() => changeZoom(-1)}
+            type="button"
+          >
+            −
+          </button>
+          <span>{FLOW_ZOOM_LABEL[zoom]}</span>
+          <button
+            aria-label="Zoom in"
+            disabled={zoom === 2}
+            onClick={() => changeZoom(1)}
+            type="button"
+          >
+            +
+          </button>
+        </div>
+      </div>
+
+      <div
+        className={`flow-canvas flow-level-${zoom}`}
+        aria-label={`Loop flow at ${FLOW_ZOOM_LABEL[zoom].toLowerCase()} detail`}
+      >
+        <ol className="flow-spine">
+          {sequence.states.map((state, index) => {
+            const link = sequence.links.find((item) => item.sourceId === state.id);
+            const usualTransition =
+              link?.transition ??
+              (sequence.loopBack?.sourceId === state.id
+                ? sequence.loopBack.transition
+                : null);
+            const alternateTransitions = state.transitions.filter(
+              (transition) => !sequence.chosenTransitionIds.has(transition.id),
+            );
+            const isFocused = focusedState?.id === state.id;
+            const isCycleStart = sequence.loopBack?.targetId === state.id;
+            const isFirstPass =
+              sequence.loopBack !== null && index < sequence.loopBack.targetIndex;
+            const isTestSource = currentWiringStep?.sourceId === state.id;
+            const isTestTarget = currentWiringStep?.targetId === state.id;
+            const handoff = link
+              ? describeHandoff(state, link.targetId)
+              : sequence.loopBack?.sourceId === state.id
+                ? describeHandoff(state, sequence.loopBack.targetId)
+                : [];
+
+            return (
+              <li className="flow-row" key={state.id}>
+                <div className="flow-row-main">
+                  <button
+                    className={`flow-state-node ${isFocused ? "is-focused" : ""} ${isCycleStart ? "is-cycle-start" : ""} ${isTestSource ? "is-test-source" : ""} ${isTestTarget ? "is-test-target" : ""}`}
+                    onClick={() => onFocus(state.id)}
+                    type="button"
+                  >
+                    <span className="flow-state-number">{index + 1}</span>
+                    <span className="flow-state-copy">
+                      <small>{STATE_KIND_LABEL[state.kind]}</small>
+                      <strong>{state.name}</strong>
+                      {zoom === 2 && <em>{state.summary}</em>}
+                    </span>
+                    {(isCycleStart || isFirstPass) && (
+                      <span className="flow-state-tag">
+                        {isCycleStart ? "Loop starts" : "Setup"}
+                      </span>
+                    )}
+                  </button>
+
+                  {zoom === 0 && alternateTransitions.length > 0 && (
+                    <button
+                      className="flow-choice-count"
+                      onClick={() => {
+                        onFocus(state.id);
+                        onZoomChange(1);
+                      }}
+                      type="button"
+                    >
+                      ◇ {state.transitions.length} paths
+                    </button>
+                  )}
+
+                  {zoom > 0 && alternateTransitions.length > 0 && (
+                    <div className="flow-branches" aria-label={`Alternate paths from ${state.name}`}>
+                      {alternateTransitions.map((transition) => {
+                        const isTesting =
+                          currentWiringStep?.transition.id === transition.id;
+                        const wasTested = testedTransitionIds.includes(transition.id);
+                        return (
+                          <button
+                            className={`${isTesting ? "is-testing" : ""} ${wasTested ? "was-tested" : ""}`}
+                            key={transition.id}
+                            onClick={() => onFocus(transition.to)}
+                            type="button"
+                          >
+                            <span aria-hidden="true">↳</span>
+                            <span>
+                              <small>
+                                {zoom === 2
+                                  ? transition.when
+                                  : TRANSITION_KIND_LABEL[transition.kind]}
+                              </small>
+                              <strong>{describeTarget(transition)}</strong>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {link && (
+                  <div
+                    className={`flow-connector ${currentWiringStep?.transition.id === link.transition.id ? "is-testing" : ""}`}
+                  >
+                    <span aria-hidden="true">↓</span>
+                    <div className={handoff.length ? "" : "is-missing"}>
+                      <strong>Handoff</strong>
+                      <small>{handoffSummary(handoff)}</small>
+                      {zoom === 2 && usualTransition && (
+                        <em>{usualTransition.when}</em>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+
+        {sequence.loopBack ? (
+          <button
+            className={`flow-loop-return ${currentWiringStep?.transition.id === sequence.loopBack.transition.id ? "is-testing" : ""}`}
+            onClick={() => onFocus(sequence.loopBack!.targetId)}
+            type="button"
+          >
+            <span aria-hidden="true">↺</span>
+            <span>
+              <strong>
+                Return to {stateById.get(sequence.loopBack.targetId)?.name}
+              </strong>
+              <small>
+                Handoff: {handoffSummary(describeHandoff(
+                  stateById.get(sequence.loopBack.sourceId)!,
+                  sequence.loopBack.targetId,
+                ))}
+              </small>
+              {zoom === 2 && <em>{sequence.loopBack.transition.when}</em>}
+            </span>
+          </button>
+        ) : (
+          <div className="flow-loop-missing">The route does not return yet.</div>
+        )}
+
+        {otherStates.length > 0 && (
+          <div className="flow-edge-states">
+            <span>Edge states</span>
+            <div>
+              {otherStates.map((state) => (
+                <button
+                  className={`${focusedState?.id === state.id ? "is-focused" : ""} ${currentWiringStep?.sourceId === state.id ? "is-test-source" : ""} ${currentWiringStep?.targetId === state.id ? "is-test-target" : ""}`}
+                  key={state.id}
+                  onClick={() => onFocus(state.id)}
+                  type="button"
+                >
+                  <small>{STATE_KIND_LABEL[state.kind]}</small>
+                  <strong>{state.name}</strong>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {focusedState && (
+        <section className={`flow-focus flow-focus-level-${zoom}`}>
+          {zoom === 2 && editing === focusedState.id ? (
+            <StateEditor
+              disabled={disabled}
+              onCancel={onCancelEdit}
+              onSave={onSave}
+              state={focusedState}
+              states={loop.states}
+            />
+          ) : (
+            <>
+              <div className="flow-focus-heading">
+                <div>
+                  <span>{STATE_KIND_LABEL[focusedState.kind]}</span>
+                  <strong>{focusedState.name}</strong>
+                  {zoom > 0 && <p>{focusedState.summary}</p>}
+                </div>
+                <div>
+                  <button onClick={() => onDiscuss(focusedState.id)} type="button">
+                    Discuss
+                  </button>
+                  <button
+                    onClick={() => {
+                      onEdit(focusedState.id);
+                      if (zoom < 2) onZoomChange(2);
+                    }}
+                    type="button"
+                  >
+                    Edit
+                  </button>
+                </div>
+              </div>
+
+              {zoom === 0 && <small>Zoom in to see decisions and state details.</small>}
+
+              {zoom === 2 && (
+                <div className="flow-contract">
+                  <div className="flow-contract-inputs">
+                    <span>Input handoff</span>
+                    <ul>
+                      {(focusedState.reads.length ? focusedState.reads : ["Nothing declared"]).map(
+                        (item) => <li key={item}>{item}</li>,
+                      )}
+                    </ul>
+                  </div>
+                  <div className="flow-contract-outputs">
+                    <span>Output handoff</span>
+                    <ul>
+                      {(focusedState.writes.length ? focusedState.writes : ["Nothing declared"]).map(
+                        (item) => <li key={item}>{item}</li>,
+                      )}
+                    </ul>
+                  </div>
+                  <div className="flow-contract-instruction">
+                    <span>What the agent does</span>
+                    <p>{focusedState.instruction}</p>
+                  </div>
+                  <div className="flow-contract-exit">
+                    <span>Exits when</span>
+                    <p>{focusedState.completion}</p>
+                  </div>
+                  <div className="flow-contract-paths">
+                    <span>Next decisions</span>
+                    {focusedState.transitions.length ? (
+                      focusedState.transitions.map((transition) => (
+                        <button
+                          key={transition.id}
+                          onClick={() => onFocus(transition.to)}
+                          type="button"
+                        >
+                          <strong>{transition.when}</strong>
+                          <small>
+                            {TRANSITION_KIND_LABEL[transition.kind]} → {describeTarget(transition)}
+                          </small>
+                        </button>
+                      ))
+                    ) : (
+                      <p>No next state. This is an accepted outcome.</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      )}
+
+      {sequence.loopBack && (
+        <button
+          className="add-step-button"
+          disabled={disabled}
+          onClick={onAddStep}
+          type="button"
+        >
+          + Add a state before the loop repeats
+        </button>
+      )}
+    </>
+  );
+}
+
 export function LoopStudio({
   initialLoop,
   initialError = null,
@@ -464,6 +818,8 @@ export function LoopStudio({
   const [isSaving, setIsSaving] = useState(false);
   const [activity, setActivity] = useState("Ready");
   const [selectedStateId, setSelectedStateId] = useState<string | null>(null);
+  const [focusedFlowStateId, setFocusedFlowStateId] = useState<string | null>(null);
+  const [flowZoom, setFlowZoom] = useState<FlowZoom>(0);
   const [editing, setEditing] = useState<"overview" | string | null>(null);
   const [parseError, setParseError] = useState<string | null>(initialError);
   const [wiringTestStatus, setWiringTestStatus] =
@@ -550,6 +906,18 @@ export function LoopStudio({
     setWiringTestIndex(-1);
     setTestedTransitionIds([]);
   }, [loop?.revision]);
+
+  useEffect(() => {
+    if (!loop?.states.length) {
+      setFocusedFlowStateId(null);
+      return;
+    }
+    setFocusedFlowStateId((current) =>
+      current && loop.states.some((state) => state.id === current)
+        ? current
+        : loop.startState,
+    );
+  }, [loop]);
 
   const rememberUiMessage = (role: "loopit" | "error", text: string) => {
     void fetch(`${DAEMON_URL}/api/conversation`, {
@@ -830,6 +1198,8 @@ export function LoopStudio({
     );
     if (saved) {
       setSelectedStateId(id);
+      setFocusedFlowStateId(id);
+      setFlowZoom(2);
       setEditing(id);
     }
   };
@@ -850,11 +1220,6 @@ export function LoopStudio({
             .map((transition) => ({ state, transition })),
         )
       : [];
-  const sequenceIds = new Set(sequence?.states.map((state) => state.id) ?? []);
-  const otherStates = loop?.states.filter((state) => !sequenceIds.has(state.id)) ?? [];
-  const sequenceIndex = new Map(
-    sequence?.states.map((state, index) => [state.id, index]) ?? [],
-  );
   const stateById = new Map(loop?.states.map((state) => [state.id, state]) ?? []);
 
   const wiringTestSteps: WiringTestStep[] = sequence
@@ -987,18 +1352,6 @@ export function LoopStudio({
       setIsAgentTesting(false);
       void refresh();
     }
-  };
-
-  const describeTarget = (transition: LoopTransition, sourceIndex?: number) => {
-    const targetIndex = sequenceIndex.get(transition.to);
-    if (targetIndex !== undefined) {
-      const movement =
-        sourceIndex !== undefined && targetIndex <= sourceIndex
-          ? "Re-enter"
-          : "Go to";
-      return `${movement} step ${targetIndex + 1}: ${stateById.get(transition.to)?.name}`;
-    }
-    return `Go to: ${stateById.get(transition.to)?.name ?? transition.to}`;
   };
 
   return (
@@ -1245,425 +1598,239 @@ export function LoopStudio({
                 ) : (
                   <p className="objective-copy">{loop.objective}</p>
                 )}
-                <div className="completion-policy-card">
-                  <span>Completion policy</span>
-                  <div>
+                <div className="loop-overview-status">
+                  <div className="completion-policy-card">
+                    <span>Completion</span>
                     <strong>{COMPLETION_POLICY_LABEL[loop.completionPolicy]}</strong>
-                    <p>{COMPLETION_POLICY_DESCRIPTION[loop.completionPolicy]}</p>
                   </div>
-                </div>
-                <div className={`simple-health ${blockingFindings.length ? "has-errors" : "is-good"}`}>
-                  <strong>
-                    {blockingFindings.length
-                      ? `${blockingFindings.length} structural ${blockingFindings.length === 1 ? "issue" : "issues"}`
-                      : "The loop can repeat"}
-                  </strong>
-                  <span>
-                    {blockingFindings.length
-                      ? "Open checks below or ask the agent to repair them."
-                      : otherTransitions.length
-                        ? `The repeating route has ${otherTransitions.length} conditional ${otherTransitions.length === 1 ? "path" : "paths"}.`
-                        : "The current definition is one repeating route with no branches yet."}
-                  </span>
+                  <div className={`simple-health ${blockingFindings.length ? "has-errors" : "is-good"}`}>
+                    <strong>
+                      {blockingFindings.length
+                        ? `${blockingFindings.length} structural ${blockingFindings.length === 1 ? "issue" : "issues"}`
+                        : "Loop closes"}
+                    </strong>
+                    <span>
+                      {loop.states.length} states · {otherTransitions.length} choices
+                    </span>
+                  </div>
                 </div>
               </div>
 
               <section className="sequence-section">
-                <div className="section-heading">
-                  <div>
-                    <span className="eyebrow">State flow</span>
-                    <h3>The usual route and its choices</h3>
-                    <p>
-                      Follow the center path for one iteration. Conditional paths
-                      stay beside the state that chooses them.
-                    </p>
-                  </div>
-                  <span>
-                    {sequence.states.length} usual {sequence.states.length === 1 ? "state" : "states"}
-                    {otherTransitions.length > 0 && ` · ${otherTransitions.length} side ${otherTransitions.length === 1 ? "path" : "paths"}`}
-                  </span>
-                </div>
+                <StateFlowCanvas
+                  currentWiringStep={currentWiringStep}
+                  disabled={isSaving || isWorking || isAgentTesting}
+                  editing={editing}
+                  focusedStateId={focusedFlowStateId}
+                  loop={loop}
+                  onAddStep={() => void addStepBeforeRepeat()}
+                  onCancelEdit={() => setEditing(null)}
+                  onDiscuss={(stateId) => setSelectedStateId(stateId)}
+                  onEdit={(stateId) => {
+                    setFocusedFlowStateId(stateId);
+                    setEditing(stateId);
+                  }}
+                  onFocus={(stateId) => {
+                    setFocusedFlowStateId(stateId);
+                    setEditing(null);
+                  }}
+                  onSave={(state) => void saveState(state)}
+                  onZoomChange={setFlowZoom}
+                  sequence={sequence}
+                  testedTransitionIds={testedTransitionIds}
+                  zoom={flowZoom}
+                />
 
-                <div className={`test-lab is-${wiringTestStatus}`}>
-                  <div className="test-lab-heading">
+                <details className={`test-lab flow-test-lab is-${wiringTestStatus}`}>
+                  <summary>
                     <div>
                       <span className="eyebrow">Preflight</span>
-                      <h4>Prove the loop before real work</h4>
-                      <p>
-                        First trace every declared transition. Then let a fresh,
-                        read-only agent challenge the state contracts. Any problem
-                        automatically becomes the next construction action.
-                      </p>
+                      <strong>Test this loop</strong>
                     </div>
-                    <div className="test-lab-actions">
-                      <button
-                        className="button-secondary"
-                        disabled={
-                          wiringTestStatus === "running" ||
-                          isWorking ||
-                          isAgentTesting
-                        }
-                        onClick={() => void runWiringTest()}
-                        type="button"
-                      >
-                        {wiringTestStatus === "passed" || wiringTestStatus === "failed"
-                          ? "Trace again"
-                          : "Trace every path"}
-                      </button>
-                      {isAgentTesting ? (
-                        <button className="button-stop" onClick={interrupt} type="button">
-                          Stop rehearsal
-                        </button>
-                      ) : (
+                    <span>
+                      {wiringTestStatus === "running"
+                        ? "Tracing"
+                        : wiringTestStatus === "passed"
+                          ? "Passed"
+                          : wiringTestStatus === "failed"
+                            ? "Needs repair"
+                            : isAgentTesting
+                              ? "Rehearsing"
+                              : "Not tested"}
+                    </span>
+                  </summary>
+
+                  <div className="flow-test-content">
+                    <div className="test-lab-heading">
+                      <p>
+                        Trace the wiring in seconds, then ask a fresh local agent
+                        to challenge the contracts and edge cases.
+                      </p>
+                      <div className="test-lab-actions">
                         <button
-                          className="button-primary"
-                          disabled={isWorking || wiringTestStatus === "running"}
-                          onClick={() => void runAgentTest()}
+                          className="button-secondary"
+                          disabled={
+                            wiringTestStatus === "running" ||
+                            isWorking ||
+                            isAgentTesting
+                          }
+                          onClick={() => void runWiringTest()}
                           type="button"
                         >
-                          Test with {agent === "codex" ? "Codex" : "Claude"}
+                          {wiringTestStatus === "passed" ||
+                          wiringTestStatus === "failed"
+                            ? "Trace again"
+                            : "Trace every path"}
                         </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {wiringTestStatus === "idle" &&
-                    !isAgentTesting &&
-                    testResolutionStatus === "idle" && (
-                    <div className="test-explanation">
-                      <span>1</span>
-                      <p><strong>Wiring test</strong> takes seconds and animates the recurrence, branches, interrupts, and completion exits.</p>
-                      <span>2</span>
-                      <p><strong>Agent rehearsal</strong> starts without chat history. Agent-owned gaps are repaired; human-owned gaps become one question.</p>
-                    </div>
-                  )}
-
-                  {wiringTestStatus === "running" && currentWiringStep && (
-                    <div className="test-running">
-                      <div className="test-progress">
-                        <span
-                          style={{
-                            width: `${Math.round(
-                              ((wiringTestIndex + 1) / wiringTestSteps.length) * 100,
-                            )}%`,
-                          }}
-                        />
-                      </div>
-                      <div className="test-now">
-                        <span>
-                          {currentWiringStep.lane === "repeat"
-                            ? "Recurrence"
-                            : currentWiringStep.lane === "edge"
-                              ? "Edge path"
-                              : "Usual path"}
-                        </span>
-                        <strong>{stateById.get(currentWiringStep.sourceId)?.name}</strong>
-                        <i aria-hidden="true">→</i>
-                        <strong>
-                          {stateById.get(currentWiringStep.targetId)?.name ??
-                            currentWiringStep.targetId}
-                        </strong>
-                        <p>{currentWiringStep.transition.when}</p>
+                        {isAgentTesting ? (
+                          <button
+                            className="button-stop"
+                            onClick={interrupt}
+                            type="button"
+                          >
+                            Stop rehearsal
+                          </button>
+                        ) : (
+                          <button
+                            className="button-primary"
+                            disabled={
+                              isWorking || wiringTestStatus === "running"
+                            }
+                            onClick={() => void runAgentTest()}
+                            type="button"
+                          >
+                            Test with {agent === "codex" ? "Codex" : "Claude"}
+                          </button>
+                        )}
                       </div>
                     </div>
-                  )}
 
-                  {(wiringTestStatus === "passed" || wiringTestStatus === "failed") && (
-                    <div className={`wiring-result is-${wiringTestStatus}`}>
-                      <span aria-hidden="true">
-                        {wiringTestStatus === "passed" ? "✓" : "!"}
-                      </span>
-                      <div>
-                        <strong>
-                          {wiringTestStatus === "passed"
-                            ? "The control flow closes"
-                            : "The control flow needs repair"}
-                        </strong>
-                        <p>
-                          {testedTransitionIds.length}/{expectedTransitionCount} transitions
-                          traced
-                          {sequence.loopBack
-                            ? ` · recurrence returns to ${stateById.get(sequence.loopBack.targetId)?.name}`
-                            : " · no recurrence found"}
-                          {blockingFindings.length
-                            ? ` · ${blockingFindings.length} blocking checks`
-                            : " · no structural blockers"}
-                        </p>
+                    {wiringTestStatus === "running" && currentWiringStep && (
+                      <div className="test-running">
+                        <div className="test-progress">
+                          <span
+                            style={{
+                              width: `${Math.round(
+                                ((wiringTestIndex + 1) /
+                                  wiringTestSteps.length) *
+                                  100,
+                              )}%`,
+                            }}
+                          />
+                        </div>
+                        <div className="test-now">
+                          <span>
+                            {currentWiringStep.lane === "repeat"
+                              ? "Recurrence"
+                              : currentWiringStep.lane === "edge"
+                                ? "Edge path"
+                                : "Usual path"}
+                          </span>
+                          <strong>
+                            {stateById.get(currentWiringStep.sourceId)?.name}
+                          </strong>
+                          <i aria-hidden="true">→</i>
+                          <strong>
+                            {stateById.get(currentWiringStep.targetId)?.name ??
+                              currentWiringStep.targetId}
+                          </strong>
+                          <p>{currentWiringStep.transition.when}</p>
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
 
-                  {isAgentTesting && (
-                    <div className="agent-test-running">
-                      <span className="pulse-dot" />
-                      <div>
-                        <strong>Fresh-agent rehearsal</strong>
-                        <p>{agentTestActivity}</p>
-                      </div>
-                    </div>
-                  )}
-
-                  {testResolutionStatus === "working" && (
-                    <div className="agent-test-running is-resolution">
-                      <span className="pulse-dot" />
-                      <div>
-                        <strong>Failure became the next action</strong>
-                        <p>
-                          The construction agent is resolving what it owns. If
-                          intent, permission, or policy is missing, it will ask one
-                          focused question in chat.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  {testResolutionStatus === "finished" && (
-                    <div className="test-next-action">
-                      <span aria-hidden="true">→</span>
-                      <div>
-                        <strong>The next action was initiated</strong>
-                        <p>
-                          Retest the updated revision, or answer the agent’s question
-                          in chat if the remaining gap belongs to you.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-
-                  {agentTest && !isAgentTesting && (
-                    <details className={`agent-test-result is-${agentTest.verdict}`} open>
-                      <summary>
-                        <span>
-                          {agentTest.verdict === "pass"
-                            ? "PASS"
-                            : agentTest.verdict === "risk"
-                              ? "NEEDS INPUT"
-                              : "REPAIR"}
+                    {(wiringTestStatus === "passed" ||
+                      wiringTestStatus === "failed") && (
+                      <div className={`wiring-result is-${wiringTestStatus}`}>
+                        <span aria-hidden="true">
+                          {wiringTestStatus === "passed" ? "✓" : "!"}
                         </span>
                         <div>
-                          <strong>Fresh-agent rehearsal</strong>
-                          <small>
-                            Revision {agentTest.loopRevision ?? "?"}
-                            {agentTest.loopRevision !== loop.revision && " · out of date"}
-                            {agentTest.testedAt &&
-                              ` · ${new Date(agentTest.testedAt).toLocaleString()}`}
-                          </small>
+                          <strong>
+                            {wiringTestStatus === "passed"
+                              ? "The control flow closes"
+                              : "The control flow needs repair"}
+                          </strong>
+                          <p>
+                            {testedTransitionIds.length}/
+                            {expectedTransitionCount} transitions traced
+                            {sequence.loopBack
+                              ? ` · returns to ${stateById.get(
+                                  sequence.loopBack.targetId,
+                                )?.name}`
+                              : " · no recurrence found"}
+                            {blockingFindings.length
+                              ? ` · ${blockingFindings.length} blocking checks`
+                              : " · no structural blockers"}
+                          </p>
                         </div>
-                        <i>View report</i>
-                      </summary>
-                      <pre>{agentTest.report}</pre>
-                    </details>
-                  )}
-                </div>
-
-                <ol className="step-sequence">
-                  {sequence.states.map((state, index) => {
-                    const link = sequence.links.find((item) => item.sourceId === state.id);
-                    const isCycleStart = sequence.loopBack?.targetId === state.id;
-                    const isBeforeCycle =
-                      sequence.loopBack !== null &&
-                      index < sequence.loopBack.targetIndex;
-                    const hasChoice = state.transitions.length > 1;
-                    const isTestSource = currentWiringStep?.sourceId === state.id;
-                    const isTestTarget = currentWiringStep?.targetId === state.id;
-                    return (
-                      <li key={state.id}>
-                        <article
-                          className={`step-card ${isCycleStart ? "is-cycle-start" : ""} ${isTestSource ? "is-test-source" : ""} ${isTestTarget ? "is-test-target" : ""}`}
-                        >
-                          {editing === state.id ? (
-                            <StateEditor
-                              disabled={isSaving}
-                              onCancel={() => setEditing(null)}
-                              onSave={(next) => void saveState(next)}
-                              state={state}
-                              states={loop.states}
-                            />
-                          ) : (
-                            <>
-                              <div className="step-number">{index + 1}</div>
-                              <div className="step-copy">
-                                <div className="step-meta">
-                                  <span>{STATE_KIND_LABEL[state.kind]}</span>
-                                  {isBeforeCycle && <strong>First pass only</strong>}
-                                  {isCycleStart && <strong>Repeats from here</strong>}
-                                </div>
-                                <h4>{state.name}</h4>
-                                <p>{state.summary}</p>
-                                <div className="done-when">
-                                  <span>State exits when</span>
-                                  {state.completion}
-                                </div>
-                                {hasChoice && (
-                                  <div className="state-paths">
-                                    <div className="state-paths-heading">
-                                      <strong>Decision here</strong>
-                                      <span>{state.transitions.length} possible paths</span>
-                                    </div>
-                                    {state.transitions.map((transition) => {
-                                      const isUsual = sequence.chosenTransitionIds.has(transition.id);
-                                      const isTesting =
-                                        currentWiringStep?.transition.id === transition.id;
-                                      const wasTested = testedTransitionIds.includes(
-                                        transition.id,
-                                      );
-                                      return (
-                                        <button
-                                          className={`${isUsual ? "is-usual" : ""} ${isTesting ? "is-testing" : ""} ${wasTested ? "was-tested" : ""}`}
-                                          key={transition.id}
-                                          onClick={() => {
-                                            setSelectedStateId(state.id);
-                                            setEditing(state.id);
-                                          }}
-                                          type="button"
-                                        >
-                                          <i aria-hidden="true">{isUsual ? "↓" : "↳"}</i>
-                                          <span>
-                                            <strong>{transition.when}</strong>
-                                            <small>
-                                              {isUsual ? "Usual route" : TRANSITION_KIND_LABEL[transition.kind]}
-                                              {" · "}{describeTarget(transition, index)}
-                                            </small>
-                                          </span>
-                                        </button>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-                              </div>
-                              <button
-                                className="edit-step-button"
-                                onClick={() => {
-                                  setSelectedStateId(state.id);
-                                  setEditing(state.id);
-                                }}
-                                type="button"
-                              >
-                                Edit
-                              </button>
-                            </>
-                          )}
-                        </article>
-                        {link && (
-                          <div
-                            className={`step-connector ${hasChoice ? "has-choice" : ""} ${currentWiringStep?.transition.id === link.transition.id ? "is-testing" : ""}`}
-                          >
-                            <span aria-hidden="true">↓</span>
-                            <p>
-                              {hasChoice && <strong>Usual route · </strong>}
-                              {link.transition.when}
-                            </p>
-                          </div>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ol>
-
-                {sequence.loopBack ? (
-                  <div
-                    className={`loop-back ${currentWiringStep?.transition.id === sequence.loopBack.transition.id ? "is-testing" : ""}`}
-                  >
-                    <span aria-hidden="true">↺</span>
-                    <div>
-                      <strong>
-                        Next iteration re-enters at step {sequence.loopBack.targetIndex + 1}: {loop.states.find((state) => state.id === sequence.loopBack?.targetId)?.name}
-                      </strong>
-                      <p>{sequence.loopBack.transition.when}</p>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="missing-loop-back">
-                    <strong>This path does not loop back yet.</strong>
-                    <button
-                      className="text-button"
-                      onClick={() =>
-                        void sendMessage(
-                          "The visual editor shows no continuation path back into the loop. Propose the smallest valid loop-back transition.",
-                          "Help me close the loop",
-                        )
-                      }
-                      type="button"
-                    >
-                      Ask agent to close it
-                    </button>
-                  </div>
-                )}
-
-                {otherStates.length > 0 && (
-                  <div className="branch-states">
-                    <div className="branch-states-heading">
-                      <div>
-                        <strong>States outside the usual route</strong>
-                        <span>Reached only when a conditional path is taken.</span>
                       </div>
-                      <span>{otherStates.length}</span>
-                    </div>
-                    <div className="branch-state-list">
-                      {otherStates.map((state) => {
-                        const incoming = loop.states.flatMap((source) =>
-                          source.transitions
-                            .filter((transition) => transition.to === state.id)
-                            .map((transition) => ({ source, transition })),
-                        );
-                        return (
-                          <article
-                            className={`branch-state-card ${currentWiringStep?.sourceId === state.id ? "is-test-source" : ""} ${currentWiringStep?.targetId === state.id ? "is-test-target" : ""}`}
-                            key={state.id}
-                          >
-                            <div className="branch-state-topline">
-                              <span>{STATE_KIND_LABEL[state.kind]}</span>
-                              <button
-                                onClick={() => {
-                                  setSelectedStateId(state.id);
-                                  setEditing(state.id);
-                                }}
-                                type="button"
-                              >
-                                Edit
-                              </button>
-                            </div>
-                            <strong>{state.name}</strong>
-                            <p>{state.summary}</p>
-                            {incoming.length > 0 && (
-                              <div className="branch-connections">
-                                <span>Entered from</span>
-                                {incoming.map(({ source, transition }) => (
-                                  <small key={transition.id}>
-                                    {source.name} · {transition.when}
-                                  </small>
-                                ))}
-                              </div>
-                            )}
-                            {state.transitions.length > 0 && (
-                              <div className="branch-connections">
-                                <span>Then</span>
-                                {state.transitions.map((transition) => (
-                                  <small key={transition.id}>
-                                    {transition.when} · {describeTarget(transition)}
-                                  </small>
-                                ))}
-                              </div>
-                            )}
-                          </article>
-                        );
-                      })}
-                    </div>
+                    )}
+
+                    {isAgentTesting && (
+                      <div className="agent-test-running">
+                        <span className="pulse-dot" />
+                        <div>
+                          <strong>Fresh-agent rehearsal</strong>
+                          <p>{agentTestActivity}</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {testResolutionStatus === "working" && (
+                      <div className="agent-test-running is-resolution">
+                        <span className="pulse-dot" />
+                        <div>
+                          <strong>Repairing the loop</strong>
+                          <p>
+                            Agent-owned gaps are being resolved. Missing human
+                            intent will become one question in chat.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {testResolutionStatus === "finished" && (
+                      <div className="test-next-action">
+                        <span aria-hidden="true">→</span>
+                        <div>
+                          <strong>The next action was initiated</strong>
+                          <p>
+                            Retest the revision or answer the remaining question
+                            in chat.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {agentTest && !isAgentTesting && (
+                      <details
+                        className={`agent-test-result is-${agentTest.verdict}`}
+                      >
+                        <summary>
+                          <span>
+                            {agentTest.verdict === "pass"
+                              ? "PASS"
+                              : agentTest.verdict === "risk"
+                                ? "NEEDS INPUT"
+                                : "REPAIR"}
+                          </span>
+                          <div>
+                            <strong>Fresh-agent rehearsal</strong>
+                            <small>
+                              Revision {agentTest.loopRevision ?? "?"}
+                              {agentTest.loopRevision !== loop.revision &&
+                                " · out of date"}
+                            </small>
+                          </div>
+                          <i>Report</i>
+                        </summary>
+                        <pre>{agentTest.report}</pre>
+                      </details>
+                    )}
                   </div>
-                )}
-
-                {sequence.loopBack && (
-                  <button
-                    className="add-step-button"
-                    disabled={isSaving || isWorking || isAgentTesting}
-                    onClick={() => void addStepBeforeRepeat()}
-                    type="button"
-                  >
-                    + Add a step before the loop repeats
-                  </button>
-                )}
+                </details>
               </section>
-
               {findings.length > 0 && (
                 <details className="validation-details">
                   <summary>Structural checks <span>{findings.length}</span></summary>
@@ -1675,6 +1842,8 @@ export function LoopStudio({
                         onClick={() => {
                           if (finding.elementId) {
                             setSelectedStateId(finding.elementId);
+                            setFocusedFlowStateId(finding.elementId);
+                            setFlowZoom(2);
                             setEditing(finding.elementId);
                           }
                         }}

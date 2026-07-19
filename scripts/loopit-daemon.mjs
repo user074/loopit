@@ -323,18 +323,20 @@ When a loop exists, read .loopit/loop.md before responding. Markdown is the only
 
 Construction principles:
 1. Keep the loop as small as possible.
-2. Every state must make its inputs, work, outputs, completion evidence, and next paths inspectable.
-3. Every nonterminal state needs an outgoing transition.
-4. A continuing cycle must evaluate evidence and update durable state before returning to more work.
-5. Human interrupts and project acceptance must be explicit. Finishing a state, iteration, feature, or first draft is not project completion.
-6. Ask focused questions only when the missing choice would materially change the loop. Otherwise propose the best draft.
-7. A failure is evidence and a transition, never an implicit stopping condition. Agent-resolvable failures must lead to bounded repair, retry, initialization, or durable state update.
-8. Missing human intent, permission, credentials, sensitive facts, acceptance thresholds, or risk policy must lead to an explicit human interrupt and one focused question. Never invent them.
-9. Missing runtime evidence must name the agent-owned action that can produce it and the explicit failure or escalation route. Never claim hypothetical evidence already exists.
-10. Choose one completion policy and record it in front matter: \`confirm\` by default for product and engineering work, \`automatic\` only when declared evidence can decide safely, or \`continuous\` for open-ended exploration that replenishes its frontier until an explicit pause boundary.
-11. Under \`confirm\` or \`automatic\`, evidence-supported completion is only a candidate. Route it through a fresh \`challenge\` state that tries to disprove completion and classifies new thoughts as agent-owned blocking gaps, human-owned intent or preference, or optional follow-up work. Agent-owned blockers return to the loop. Optional ideas go to a backlog and do not silently expand the current objective.
-12. Under \`confirm\`, the challenged candidate must reach one focused human acceptance decision. Under \`automatic\`, it may be accepted only after the fresh challenge finds no blocker and all declared evidence checks pass. A \`continuous\` loop normally has no self-selected project-completion exit.
-13. After editing the file, respond conversationally with what changed, why, and the most important remaining uncertainty. Keep the reply concise.
+2. Model the ordinary route as an explicit artifact handoff pipeline: each state writes a small named work product that its usual next state reads under exactly the same name. A reader should be able to see what changes hands between states without reading the instructions.
+3. Keep initialization narrow and first-pass only: it may create or validate scaffolds, but it must not also own the ordinary outputs of selection, action, evaluation, or update. Put interrupted writes and corrupted checkpoints in one separate, narrowly scoped recovery state. Expected product or test failures remain evidence for evaluation and durable update; they do not restart initialization.
+4. Every state must make its inputs, work, outputs, completion evidence, and next paths inspectable.
+5. Every nonterminal state needs an outgoing transition.
+6. A continuing cycle must evaluate evidence and update durable state before returning to more work.
+7. Human interrupts and project acceptance must be explicit. Finishing a state, iteration, feature, or first draft is not project completion.
+8. Ask focused questions only when the missing choice would materially change the loop. Otherwise propose the best draft.
+9. A failure is evidence and a transition, never an implicit stopping condition. Agent-resolvable failures must lead to bounded repair, retry, recovery, or durable state update.
+10. Missing human intent, permission, credentials, sensitive facts, acceptance thresholds, or risk policy must lead to an explicit human interrupt and one focused question. Never invent them.
+11. Missing runtime evidence must name the agent-owned action that can produce it and the explicit failure or escalation route. Never claim hypothetical evidence already exists.
+12. Choose one completion policy and record it in front matter: \`confirm\` by default for product and engineering work, \`automatic\` only when declared evidence can decide safely, or \`continuous\` for open-ended exploration that replenishes its frontier until an explicit pause boundary.
+13. Under \`confirm\` or \`automatic\`, evidence-supported completion is only a candidate. Route it through a fresh \`challenge\` state that tries to disprove completion and classifies new thoughts as agent-owned blocking gaps, human-owned intent or preference, or optional follow-up work. Agent-owned blockers return to the loop. Optional ideas go to a backlog and do not silently expand the current objective.
+14. Under \`confirm\`, the challenged candidate must reach one focused human acceptance decision. Under \`automatic\`, it may be accepted only after the fresh challenge finds no blocker and all declared evidence checks pass. A \`continuous\` loop normally has no self-selected project-completion exit.
+15. After editing the file, respond conversationally with what changed, why, and the most important remaining uncertainty. Keep the reply concise.
 
 ${selected}
 
@@ -438,12 +440,13 @@ Read .loopit/loop.md as if you were a fresh agent with no conversation history. 
 
 Test whether the loop's control contract can continue safely:
 1. Trace the ordinary route from the declared start through one complete recurrence back into the repeating cycle.
-2. For every state, check whether its Reads, Instruction, Writes, Completion, and transition conditions give a fresh agent enough information to finish the state and select exactly an explicit next path.
-3. Challenge every alternate path and boundary using plausible cases: missing input, failed work, ambiguous evidence, no useful frontier item, human authorization required, and objective completed.
-4. Look specifically for silent stops: an agent turn can end, a tool can fail, or expected evidence can be absent, yet the runtime still needs an explicit next state, recovery, interrupt, or completion boundary.
-5. Distinguish structural proof from untested production behavior. Do not pass a claim that requires artifacts or fixtures which do not exist.
-6. Classify every issue by ownership: agent-resolvable control or scaffolding work, human-required intent or authority, or runtime evidence that needs a sandbox trial. Every issue must name its next action.
-7. Challenge false completion explicitly. Finishing a draft, one iteration, or the current frontier is not enough. Verify that the declared completion policy is followed, that a fresh challenger can reopen agent-owned gaps, and that acceptance cannot bypass the challenger. For a human-confirmed policy, verify the challenger reaches one focused human acceptance decision; for evidence-based automatic completion, verify declared checks can decide it; for continuous exploration, verify findings replenish the frontier instead of claiming project completion.
+2. Trace the named artifact handed from each ordinary state to the next. Fail a handoff that exists only in prose, uses inconsistent names, or makes initialization own the outputs of ordinary selection, action, evaluation, or update states. Flag a common fallback that mixes first-time initialization with recovery from every failure.
+3. For every state, check whether its Reads, Instruction, Writes, Completion, and transition conditions give a fresh agent enough information to finish the state and select exactly an explicit next path.
+4. Challenge every alternate path and boundary using plausible cases: missing input, failed work, ambiguous evidence, no useful frontier item, human authorization required, and objective completed.
+5. Look specifically for silent stops: an agent turn can end, a tool can fail, or expected evidence can be absent, yet the runtime still needs an explicit next state, recovery, interrupt, or completion boundary.
+6. Distinguish structural proof from untested production behavior. Do not pass a claim that requires artifacts or fixtures which do not exist.
+7. Classify every issue by ownership: agent-resolvable control or scaffolding work, human-required intent or authority, or runtime evidence that needs a sandbox trial. Every issue must name its next action.
+8. Challenge false completion explicitly. Finishing a draft, one iteration, or the current frontier is not enough. Verify that the declared completion policy is followed, that a fresh challenger can reopen agent-owned gaps, and that acceptance cannot bypass the challenger. For a human-confirmed policy, verify the challenger reaches one focused human acceptance decision; for evidence-based automatic completion, verify declared checks can decide it; for continuous exploration, verify findings replenish the frontier instead of claiming project completion.
 
 A non-PASS verdict is not a terminal outcome. It means the finding becomes the next construction action: agent-owned gaps should be repaired, human-owned gaps should become one focused question, and runtime-evidence gaps should become an explicit test action with failure routing.
 

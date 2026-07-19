@@ -93,6 +93,45 @@ test("the displayed state flow follows a reachable cycle and keeps branches asid
   assert.equal(sequence.chosenTransitionIds.size + sideTransitions.length, transitionCount);
 });
 
+test("validation exposes unnamed state handoffs", () => {
+  const missingHandoff = structuredClone(loop);
+  const evaluate = missingHandoff.states.find(
+    (state) => state.id === "evaluate-work",
+  );
+  assert.ok(evaluate);
+  evaluate.reads = evaluate.reads.filter((item) => item !== "Selected item");
+
+  assert.ok(
+    validateLoop(missingHandoff).some(
+      (finding) => finding.id === "missing-handoff-observe-to-evaluate",
+    ),
+  );
+});
+
+test("validation exposes a shared recovery funnel", () => {
+  const funnel = structuredClone(loop);
+  for (const [sourceId, transitionId] of [
+    ["observe-work", "observe-to-repair"],
+    ["wait-for-human", "human-to-repair"],
+    ["confirm-completion", "confirm-to-repair"],
+  ]) {
+    const source = funnel.states.find((state) => state.id === sourceId);
+    assert.ok(source);
+    source.transitions.push({
+      id: transitionId,
+      to: "update-state",
+      when: "A required record is missing or corrupt",
+      kind: "normal",
+    });
+  }
+
+  assert.ok(
+    validateLoop(funnel).some(
+      (finding) => finding.id === "shared-fallback-update-state",
+    ),
+  );
+});
+
 test("human-confirmed completion requires a challenger with both outcomes", () => {
   const missingChallenge = structuredClone(loop);
   missingChallenge.states = missingChallenge.states.filter(

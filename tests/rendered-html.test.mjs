@@ -49,17 +49,18 @@ test("server-renders the Loopit construction studio", async () => {
   assert.match(html, /New conversation/);
   assert.match(html, /\+ New/);
   assert.match(html, /History/);
-  assert.match(html, /No loop yet|Prove the loop before real work/);
+  assert.match(html, /No loop yet|One handoff pipeline, with decisions beside it/);
   assert.match(html, /Construct my first loop|Trace every path/);
   assert.doesNotMatch(html, /codex-preview/);
   assert.doesNotMatch(html, /Your site is taking shape/);
 });
 
 test("the product no longer depends on the disposable starter", async () => {
-  const [page, layout, packageJson] = await Promise.all([
+  const [page, layout, packageJson, studio] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../app/components/LoopStudio.tsx", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /LoopStudio/);
@@ -67,4 +68,8 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.match(layout, /Loopit — Construct agent loops/);
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   assert.doesNotMatch(page, /_sites-preview|SkeletonPreview/);
+  assert.match(studio, /FLOW_ZOOM_LABEL/);
+  assert.match(studio, /One handoff pipeline, with decisions beside it/);
+  assert.match(studio, /No named artifact handoff/);
+  assert.match(studio, /Zoom in to see decisions and state details/);
 });

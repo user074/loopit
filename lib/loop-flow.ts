@@ -22,6 +22,26 @@ export interface PrimarySequence {
   chosenTransitionIds: Set<string>;
 }
 
+function normalizeArtifactName(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[`*_]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Return the durable artifacts a source state explicitly writes and its target
+ * explicitly reads. Requiring the same name on both sides keeps a handoff
+ * inspectable instead of asking the next agent to infer hidden context.
+ */
+export function stateHandoff(source: LoopState, target: LoopState) {
+  const targetReads = new Set(target.reads.map(normalizeArtifactName));
+  return source.writes.filter((item) =>
+    targetReads.has(normalizeArtifactName(item)),
+  );
+}
+
 interface CycleTrace {
   stateIds: string[];
   transitions: LoopTransition[];
