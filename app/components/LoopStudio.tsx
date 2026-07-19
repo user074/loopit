@@ -8,6 +8,7 @@ import type {
   StateKind,
   TransitionKind,
 } from "@/lib/loop-types";
+import { primarySequence } from "@/lib/loop-flow";
 import { validateLoop } from "@/lib/loop-validation";
 
 const DAEMON_URL = "http://127.0.0.1:4318";
@@ -33,23 +34,6 @@ interface ChatMessage {
   role: "loopit" | "user" | "agent" | "error";
   text: string;
   source?: AgentName;
-}
-
-interface SequenceLink {
-  sourceId: string;
-  targetId: string;
-  transition: LoopTransition;
-}
-
-interface LoopBack extends SequenceLink {
-  targetIndex: number;
-}
-
-interface PrimarySequence {
-  states: LoopState[];
-  links: SequenceLink[];
-  loopBack: LoopBack | null;
-  chosenTransitionIds: Set<string>;
 }
 
 const STATE_KIND_LABEL: Record<StateKind, string> = {
@@ -80,50 +64,6 @@ function newMessage(
     text,
     source,
   };
-}
-
-function primarySequence(loop: LoopDefinition): PrimarySequence {
-  const stateMap = new Map(loop.states.map((state) => [state.id, state]));
-  const visited = new Map<string, number>();
-  const states: LoopState[] = [];
-  const links: SequenceLink[] = [];
-  const chosenTransitionIds = new Set<string>();
-  let loopBack: LoopBack | null = null;
-  let currentId: string | undefined = loop.startState;
-
-  while (currentId && states.length <= loop.states.length) {
-    const state = stateMap.get(currentId);
-    if (!state || visited.has(currentId)) break;
-
-    visited.set(currentId, states.length);
-    states.push(state);
-
-    const transition =
-      state.transitions.find((item) => item.kind === "continue") ??
-      state.transitions.find((item) => item.kind === "normal");
-    if (!transition) break;
-
-    chosenTransitionIds.add(transition.id);
-    const targetIndex = visited.get(transition.to);
-    if (targetIndex !== undefined) {
-      loopBack = {
-        sourceId: state.id,
-        targetId: transition.to,
-        transition,
-        targetIndex,
-      };
-      break;
-    }
-
-    links.push({
-      sourceId: state.id,
-      targetId: transition.to,
-      transition,
-    });
-    currentId = transition.to;
-  }
-
-  return { states, links, loopBack, chosenTransitionIds };
 }
 
 function splitLines(value: string) {
@@ -690,6 +630,22 @@ export function LoopStudio({
       : [];
   const sequenceIds = new Set(sequence?.states.map((state) => state.id) ?? []);
   const otherStates = loop?.states.filter((state) => !sequenceIds.has(state.id)) ?? [];
+  const sequenceIndex = new Map(
+    sequence?.states.map((state, index) => [state.id, index]) ?? [],
+  );
+  const stateById = new Map(loop?.states.map((state) => [state.id, state]) ?? []);
+
+  const describeTarget = (transition: LoopTransition, sourceIndex?: number) => {
+    const targetIndex = sequenceIndex.get(transition.to);
+    if (targetIndex !== undefined) {
+      const movement =
+        sourceIndex !== undefined && targetIndex <= sourceIndex
+          ? "Re-enter"
+          : "Go to";
+      return `${movement} step ${targetIndex + 1}: ${stateById.get(transition.to)?.name}`;
+    }
+    return `Go to: ${stateById.get(transition.to)?.name ?? transition.to}`;
+  };
 
   return (
     <main className="studio-shell">
@@ -890,7 +846,9 @@ export function LoopStudio({
                   <span>
                     {blockingFindings.length
                       ? "Open checks below or ask the agent to repair them."
-                      : "A path returns to earlier work after state is updated."}
+                      : otherTransitions.length
+                        ? `The repeating route has ${otherTransitions.length} conditional ${otherTransitions.length === 1 ? "path" : "paths"}.`
+                        : "The current definition is one repeating route with no branches yet."}
                   </span>
                 </div>
               </div>
@@ -898,16 +856,27 @@ export function LoopStudio({
               <section className="sequence-section">
                 <div className="section-heading">
                   <div>
-                    <span className="eyebrow">The continuing path</span>
-                    <h3>What happens, one step at a time</h3>
+                    <span className="eyebrow">State flow</span>
+                    <h3>The usual route and its choices</h3>
+                    <p>
+                      Follow the center path for one iteration. Conditional paths
+                      stay beside the state that chooses them.
+                    </p>
                   </div>
-                  <span>{sequence.states.length} steps</span>
+                  <span>
+                    {sequence.states.length} usual {sequence.states.length === 1 ? "state" : "states"}
+                    {otherTransitions.length > 0 && ` · ${otherTransitions.length} side ${otherTransitions.length === 1 ? "path" : "paths"}`}
+                  </span>
                 </div>
 
                 <ol className="step-sequence">
                   {sequence.states.map((state, index) => {
                     const link = sequence.links.find((item) => item.sourceId === state.id);
                     const isCycleStart = sequence.loopBack?.targetId === state.id;
+                    const isBeforeCycle =
+                      sequence.loopBack !== null &&
+                      index < sequence.loopBack.targetIndex;
+                    const hasChoice = state.transitions.length > 1;
                     return (
                       <li key={state.id}>
                         <article className={`step-card ${isCycleStart ? "is-cycle-start" : ""}`}>
@@ -925,7 +894,8 @@ export function LoopStudio({
                               <div className="step-copy">
                                 <div className="step-meta">
                                   <span>{STATE_KIND_LABEL[state.kind]}</span>
-                                  {isCycleStart && <strong>Loop begins here</strong>}
+                                  {isBeforeCycle && <strong>First pass only</strong>}
+                                  {isCycleStart && <strong>Repeats from here</strong>}
                                 </div>
                                 <h4>{state.name}</h4>
                                 <p>{state.summary}</p>
@@ -933,6 +903,37 @@ export function LoopStudio({
                                   <span>Done when</span>
                                   {state.completion}
                                 </div>
+                                {hasChoice && (
+                                  <div className="state-paths">
+                                    <div className="state-paths-heading">
+                                      <strong>Decision here</strong>
+                                      <span>{state.transitions.length} possible paths</span>
+                                    </div>
+                                    {state.transitions.map((transition) => {
+                                      const isUsual = sequence.chosenTransitionIds.has(transition.id);
+                                      return (
+                                        <button
+                                          className={isUsual ? "is-usual" : ""}
+                                          key={transition.id}
+                                          onClick={() => {
+                                            setSelectedStateId(state.id);
+                                            setEditing(state.id);
+                                          }}
+                                          type="button"
+                                        >
+                                          <i aria-hidden="true">{isUsual ? "↓" : "↳"}</i>
+                                          <span>
+                                            <strong>{transition.when}</strong>
+                                            <small>
+                                              {isUsual ? "Usual route" : TRANSITION_KIND_LABEL[transition.kind]}
+                                              {" · "}{describeTarget(transition, index)}
+                                            </small>
+                                          </span>
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                )}
                               </div>
                               <button
                                 className="edit-step-button"
@@ -948,9 +949,12 @@ export function LoopStudio({
                           )}
                         </article>
                         {link && (
-                          <div className="step-connector">
+                          <div className={`step-connector ${hasChoice ? "has-choice" : ""}`}>
                             <span aria-hidden="true">↓</span>
-                            <p>{link.transition.when}</p>
+                            <p>
+                              {hasChoice && <strong>Usual route · </strong>}
+                              {link.transition.when}
+                            </p>
                           </div>
                         )}
                       </li>
@@ -963,7 +967,7 @@ export function LoopStudio({
                     <span aria-hidden="true">↺</span>
                     <div>
                       <strong>
-                        Then return to step {sequence.loopBack.targetIndex + 1}: {loop.states.find((state) => state.id === sequence.loopBack?.targetId)?.name}
+                        Next iteration re-enters at step {sequence.loopBack.targetIndex + 1}: {loop.states.find((state) => state.id === sequence.loopBack?.targetId)?.name}
                       </strong>
                       <p>{sequence.loopBack.transition.when}</p>
                     </div>
@@ -986,6 +990,65 @@ export function LoopStudio({
                   </div>
                 )}
 
+                {otherStates.length > 0 && (
+                  <div className="branch-states">
+                    <div className="branch-states-heading">
+                      <div>
+                        <strong>States outside the usual route</strong>
+                        <span>Reached only when a conditional path is taken.</span>
+                      </div>
+                      <span>{otherStates.length}</span>
+                    </div>
+                    <div className="branch-state-list">
+                      {otherStates.map((state) => {
+                        const incoming = loop.states.flatMap((source) =>
+                          source.transitions
+                            .filter((transition) => transition.to === state.id)
+                            .map((transition) => ({ source, transition })),
+                        );
+                        return (
+                          <article className="branch-state-card" key={state.id}>
+                            <div className="branch-state-topline">
+                              <span>{STATE_KIND_LABEL[state.kind]}</span>
+                              <button
+                                onClick={() => {
+                                  setSelectedStateId(state.id);
+                                  setEditing(state.id);
+                                }}
+                                type="button"
+                              >
+                                Edit
+                              </button>
+                            </div>
+                            <strong>{state.name}</strong>
+                            <p>{state.summary}</p>
+                            {incoming.length > 0 && (
+                              <div className="branch-connections">
+                                <span>Entered from</span>
+                                {incoming.map(({ source, transition }) => (
+                                  <small key={transition.id}>
+                                    {source.name} · {transition.when}
+                                  </small>
+                                ))}
+                              </div>
+                            )}
+                            {state.transitions.length > 0 && (
+                              <div className="branch-connections">
+                                <span>Then</span>
+                                {state.transitions.map((transition) => (
+                                  <small key={transition.id}>
+                                    {transition.when} · {describeTarget(transition)}
+                                  </small>
+                                ))}
+                              </div>
+                            )}
+                          </article>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 {sequence.loopBack && (
                   <button
                     className="add-step-button"
@@ -997,45 +1060,6 @@ export function LoopStudio({
                   </button>
                 )}
               </section>
-
-              {(otherTransitions.length > 0 || otherStates.length > 0) && (
-                <details className="secondary-paths">
-                  <summary>
-                    Stops, alternate paths, and other steps
-                    <span>{otherTransitions.length + otherStates.length}</span>
-                  </summary>
-                  <div className="secondary-list">
-                    {otherTransitions.map(({ state, transition }) => (
-                      <button
-                        key={transition.id}
-                        onClick={() => {
-                          setSelectedStateId(state.id);
-                          setEditing(state.id);
-                        }}
-                        type="button"
-                      >
-                        <span>{TRANSITION_KIND_LABEL[transition.kind]}</span>
-                        <strong>{state.name}</strong>
-                        <p>{transition.when}</p>
-                      </button>
-                    ))}
-                    {otherStates.map((state) => (
-                      <button
-                        key={state.id}
-                        onClick={() => {
-                          setSelectedStateId(state.id);
-                          setEditing(state.id);
-                        }}
-                        type="button"
-                      >
-                        <span>Other step</span>
-                        <strong>{state.name}</strong>
-                        <p>{state.summary}</p>
-                      </button>
-                    ))}
-                  </div>
-                </details>
-              )}
 
               {findings.length > 0 && (
                 <details className="validation-details">

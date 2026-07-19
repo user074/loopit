@@ -6,6 +6,7 @@ import {
   parseLoopMarkdown,
   serializeLoopMarkdown,
 } from "../lib/loop-markdown.mjs";
+import { primarySequence } from "../lib/loop-flow.ts";
 import { validateLoop } from "../lib/loop-validation.ts";
 
 const loopSource = await readFile(
@@ -56,4 +57,39 @@ test("validation identifies a nonterminal dead end", () => {
   const findings = validateLoop(broken);
   assert.ok(findings.some((finding) => finding.id === "dead-end-update-state"));
   assert.ok(findings.some((finding) => finding.id === "missing-cycle"));
+});
+
+test("the displayed state flow follows a reachable cycle and keeps branches aside", () => {
+  const sequence = primarySequence(loop);
+
+  assert.deepEqual(
+    sequence.states.map((state) => state.id),
+    ["observe-work", "evaluate-work", "update-state"],
+  );
+  assert.equal(sequence.loopBack?.targetId, "evaluate-work");
+  assert.equal(sequence.loopBack?.targetIndex, 1);
+  assert.equal(sequence.chosenTransitionIds.has("observe-to-human"), false);
+  assert.equal(sequence.chosenTransitionIds.has("evaluate-to-complete"), false);
+});
+
+test("the displayed state flow backtracks past a dead end to find the loop", () => {
+  const branching = structuredClone(loop);
+  const observe = branching.states.find((state) => state.id === "observe-work");
+  assert.ok(observe);
+  observe.transitions = [
+    {
+      id: "observe-to-complete-first",
+      to: "loop-complete",
+      when: "A tempting first path stops",
+      kind: "normal",
+    },
+    ...observe.transitions,
+  ];
+
+  const sequence = primarySequence(branching);
+  assert.equal(sequence.loopBack?.targetId, "evaluate-work");
+  assert.equal(
+    sequence.chosenTransitionIds.has("observe-to-complete-first"),
+    false,
+  );
 });

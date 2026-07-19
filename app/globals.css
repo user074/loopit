@@ -523,12 +523,21 @@ p {
   font-size: 19px;
 }
 
+.section-heading > div > p {
+  max-width: 520px;
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .section-heading > span {
   padding: 5px 8px;
   border-radius: 6px;
   background: var(--soft);
   color: var(--muted);
   font-size: 11px;
+  text-align: right;
 }
 
 .step-sequence {
@@ -613,6 +622,85 @@ p {
   text-transform: uppercase;
 }
 
+.state-paths {
+  margin-top: 11px;
+  overflow: hidden;
+  border: 1px solid #ddd8cd;
+  border-radius: 9px;
+  background: #fbfaf7;
+}
+
+.state-paths-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  color: #5f615d;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.state-paths-heading > span {
+  color: #8a8c87;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.state-paths > button {
+  display: grid;
+  grid-template-columns: 25px minmax(0, 1fr);
+  gap: 8px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-top: 1px solid #e5e1d8;
+  background: white;
+  text-align: left;
+  cursor: pointer;
+}
+
+.state-paths > button.is-usual {
+  background: #f1f7f3;
+}
+
+.state-paths > button > i {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-style: normal;
+  font-weight: 750;
+}
+
+.state-paths > button.is-usual > i {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.state-paths > button > span,
+.state-paths > button strong,
+.state-paths > button small {
+  display: block;
+}
+
+.state-paths > button strong {
+  margin-bottom: 3px;
+  color: #48524d;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.state-paths > button small {
+  color: #7a837e;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
 .edit-step-button {
   align-self: start;
   padding: 5px 8px;
@@ -639,6 +727,13 @@ p {
   margin: 2px 0 0;
   font-size: 11px;
   text-align: center;
+}
+
+.step-connector.has-choice p {
+  padding: 4px 7px;
+  border-radius: 5px;
+  background: var(--green-soft);
+  color: #3a694f;
 }
 
 .loop-back {
@@ -672,6 +767,117 @@ p {
   border-radius: 10px;
   background: var(--amber-soft);
   color: #765026;
+}
+
+.branch-states {
+  margin-top: 22px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.branch-states-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 11px;
+}
+
+.branch-states-heading > div {
+  display: grid;
+  gap: 3px;
+}
+
+.branch-states-heading > div > span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.branch-states-heading > span {
+  display: grid;
+  place-items: center;
+  min-width: 25px;
+  height: 25px;
+  border-radius: 7px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.branch-state-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.branch-state-card {
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid #ddd8cd;
+  border-radius: 10px;
+  background: #fbfaf7;
+}
+
+.branch-state-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.branch-state-topline > span {
+  color: var(--amber);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.branch-state-topline button {
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.branch-state-card > strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+
+.branch-state-card > p {
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.branch-connections {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e6e1d8;
+}
+
+.branch-connections > span {
+  color: #8c8b83;
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.branch-connections small {
+  color: #5f6964;
+  font-size: 10px;
+  line-height: 1.4;
 }
 
 .text-button {
@@ -932,6 +1138,10 @@ p {
 
   .field-grid,
   .transition-edit-row {
+    grid-template-columns: 1fr;
+  }
+
+  .branch-state-list {
     grid-template-columns: 1fr;
   }
 
