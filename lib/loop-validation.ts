@@ -212,6 +212,43 @@ export function validateLoop(loop: LoopDefinition): ValidationFinding[] {
     }
   }
 
+  const resultHandoffs = primaryLinks.flatMap((link) => {
+    const source = stateMap.get(link.sourceId);
+    const target = stateMap.get(link.targetId);
+    if (
+      !source ||
+      !target ||
+      source.kind !== "act" ||
+      (target.kind !== "evaluate" && target.kind !== "update")
+    ) {
+      return [];
+    }
+    return stateHandoff(source, target).map((artifact) => ({
+      artifact,
+      source,
+    }));
+  });
+  if (resultHandoffs.length) {
+    findings.push(
+      finding(
+        "result-handoff-found",
+        "pass",
+        "A portable result handoff is defined",
+        resultHandoffs.map(({ artifact }) => artifact).join(", "),
+        resultHandoffs[0].source.id,
+      ),
+    );
+  } else {
+    findings.push(
+      finding(
+        "missing-result-handoff",
+        "warning",
+        "The recurring cycle has no explicit result handoff",
+        "An execution state should write one named result package that its evaluation or integration state reads. Use the domain's native deliverable plus the evidence and provenance a fresh consumer needs.",
+      ),
+    );
+  }
+
   const chosenTransitionIds = sequence.chosenTransitionIds;
   const recoverySourcesByTarget = new Map<string, Set<string>>();
   for (const state of loop.states) {
@@ -283,28 +320,33 @@ export function validateLoop(loop: LoopDefinition): ValidationFinding[] {
     const cycleStates = cycle
       .map((id) => stateMap.get(id))
       .filter(Boolean) as LoopState[];
-    if (!cycleStates.some((state) => state.kind === "evaluate")) {
+    if (
+      !cycleStates.some((state) => state.kind === "evaluate") &&
+      resultHandoffs.length === 0
+    ) {
       findings.push(
         finding(
           "cycle-missing-evaluation",
           "warning",
           "The cycle does not evaluate evidence",
-          "Add an evaluation state before the loop continues.",
+          "Add an evaluation state, or let the integration state consume the execution result package before the loop continues.",
           cycle[0],
         ),
       );
     }
     if (
       !cycleStates.some(
-        (state) => state.kind === "update" && state.writes.length > 0,
+        (state) =>
+          (state.kind === "evaluate" || state.kind === "update") &&
+          state.writes.length > 0,
       )
     ) {
       findings.push(
         finding(
           "cycle-missing-update",
           "error",
-          "The cycle does not update durable state",
-          "A continuing cycle must write state that the next iteration can read.",
+          "The cycle does not integrate its result",
+          "The evaluation or integration state must write durable state and a frontier that the next iteration can read.",
           cycle[0],
         ),
       );
@@ -331,22 +373,47 @@ export function validateLoop(loop: LoopDefinition): ValidationFinding[] {
   const challengeStates = loop.states.filter(
     (state) => state.kind === "challenge",
   );
-  const completionRequiresChallenge =
+  const completionNeedsAcceptance =
     loop.completionPolicy === "confirm" ||
     loop.completionPolicy === "automatic";
+  const completeTransitions = loop.states.flatMap((state) =>
+    state.transitions
+      .filter((transition) => transition.kind === "complete")
+      .map((transition) => ({ state, transition })),
+  );
 
-  if (completionRequiresChallenge && challengeStates.length === 0) {
-    findings.push(
-      finding(
-        "missing-completion-challenge",
-        "error",
-        "Candidate completion is not challenged",
-        "Add a fresh completion-challenge state before the project can be accepted.",
-      ),
-    );
+  if (completionNeedsAcceptance && challengeStates.length === 0) {
+    for (const { state, transition } of completeTransitions) {
+      const condition = transition.when.toLowerCase();
+      if (!condition.includes("challeng")) {
+        findings.push(
+          finding(
+            `completion-policy-missing-challenge-${transition.id}`,
+            "error",
+            "Runtime completion does not name its challenge",
+            "A completion protocol may stay outside the domain graph, but its acceptance condition must still require a fresh challenge.",
+            state.id,
+          ),
+        );
+      }
+      if (
+        loop.completionPolicy === "confirm" &&
+        !/accept|confirm/.test(condition)
+      ) {
+        findings.push(
+          finding(
+            `completion-policy-missing-confirmation-${transition.id}`,
+            "error",
+            "Runtime completion does not name human acceptance",
+            "The confirm policy may stay outside the domain graph, but its completion condition must still require explicit human acceptance.",
+            state.id,
+          ),
+        );
+      }
+    }
   }
 
-  if (completionRequiresChallenge && challengeStates.length > 0) {
+  if (completionNeedsAcceptance && challengeStates.length > 0) {
     const stateMapWithoutChallenge = new Map(
       loop.states
         .filter((state) => state.kind !== "challenge")
@@ -466,10 +533,10 @@ export function validateLoop(loop: LoopDefinition): ValidationFinding[] {
     findings.push(
       finding(
         "missing-completion",
-        completionRequiresChallenge ? "error" : "pass",
+        completionNeedsAcceptance ? "error" : "pass",
         "No completion path is defined",
-        completionRequiresChallenge
-          ? "Describe the acceptance path after candidate completion is challenged."
+        completionNeedsAcceptance
+          ? "Describe the runtime acceptance path after candidate completion is challenged. It does not need to be a permanent domain-loop state."
           : "This matches the continuous policy: new findings return to the frontier until an explicit pause boundary is reached.",
       ),
     );

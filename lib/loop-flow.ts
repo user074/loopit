@@ -84,7 +84,9 @@ function scoreCycle(
   if (cycleStates.some((state) => state.kind === "evaluate")) score += 300;
   if (
     cycleStates.some(
-      (state) => state.kind === "update" && state.writes.length > 0,
+      (state) =>
+        (state.kind === "evaluate" || state.kind === "update") &&
+        state.writes.length > 0,
     )
   ) {
     score += 200;

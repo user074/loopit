@@ -132,22 +132,32 @@ test("validation exposes a shared recovery funnel", () => {
   );
 });
 
-test("human-confirmed completion requires a challenger with both outcomes", () => {
-  const missingChallenge = structuredClone(loop);
-  missingChallenge.states = missingChallenge.states.filter(
-    (state) => state.id !== "challenge-completion",
+test("human-confirmed completion may use a runtime protocol outside the domain graph", () => {
+  const runtimeCompletion = structuredClone(loop);
+  runtimeCompletion.states = runtimeCompletion.states.filter(
+    (state) =>
+      state.id !== "challenge-completion" &&
+      state.id !== "confirm-completion",
   );
-  const evaluate = missingChallenge.states.find(
+  const evaluate = runtimeCompletion.states.find(
     (state) => state.id === "evaluate-work",
   );
   assert.ok(evaluate);
   evaluate.transitions = evaluate.transitions.filter(
     (transition) => transition.to !== "challenge-completion",
   );
+  evaluate.transitions.push({
+    id: "evaluate-to-runtime-acceptance",
+    to: "loop-complete",
+    when: "A fresh runtime challenge passes and the human accepts the candidate",
+    kind: "complete",
+  });
 
-  const findings = validateLoop(missingChallenge);
-  assert.ok(
-    findings.some((finding) => finding.id === "missing-completion-challenge"),
+  assert.equal(
+    validateLoop(runtimeCompletion).filter(
+      (finding) => finding.severity === "error",
+    ).length,
+    0,
   );
 
   const noReopen = structuredClone(loop);
@@ -162,6 +172,44 @@ test("human-confirmed completion requires a challenger with both outcomes", () =
     validateLoop(noReopen).some(
       (finding) =>
         finding.id === "challenge-cannot-continue-challenge-completion",
+    ),
+  );
+});
+
+test("runtime completion still names its challenge and acceptance", () => {
+  const unsafeRuntimeCompletion = structuredClone(loop);
+  unsafeRuntimeCompletion.states = unsafeRuntimeCompletion.states.filter(
+    (state) =>
+      state.id !== "challenge-completion" &&
+      state.id !== "confirm-completion",
+  );
+  const evaluate = unsafeRuntimeCompletion.states.find(
+    (state) => state.id === "evaluate-work",
+  );
+  assert.ok(evaluate);
+  evaluate.transitions = evaluate.transitions.filter(
+    (transition) => transition.to !== "challenge-completion",
+  );
+  evaluate.transitions.push({
+    id: "evaluate-to-unsafe-runtime-acceptance",
+    to: "loop-complete",
+    when: "The current evidence appears sufficient",
+    kind: "complete",
+  });
+
+  const findings = validateLoop(unsafeRuntimeCompletion);
+  assert.ok(
+    findings.some(
+      (finding) =>
+        finding.id ===
+        "completion-policy-missing-challenge-evaluate-to-unsafe-runtime-acceptance",
+    ),
+  );
+  assert.ok(
+    findings.some(
+      (finding) =>
+        finding.id ===
+        "completion-policy-missing-confirmation-evaluate-to-unsafe-runtime-acceptance",
     ),
   );
 });

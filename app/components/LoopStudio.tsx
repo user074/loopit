@@ -19,11 +19,11 @@ const START_CONSTRUCTION =
 const RESOLVE_TEST_FAILURE = `The latest .loopit/test-report.md found unresolved preflight issues. Treat this result as the next construction action, never as a reason to stop.
 
 Read both .loopit/loop.md and .loopit/test-report.md. Classify every issue by ownership:
-- Agent-owned: missing control logic, recovery, initialization, state contract, transition priority, or artifact scaffold that an agent can define safely. Resolve these now by making the smallest coherent update to loop.md.
+- Agent-owned: missing domain handoff, unclear native deliverable, incomplete Result package, inconsistent artifact ownership, or state integration logic that an agent can define safely. Resolve these now by making the smallest coherent update to loop.md.
 - Human-owned: product intent, acceptance threshold, permission, credential, sensitive fact, risk choice, or policy that the agent must not invent. After resolving agent-owned issues, ask exactly one focused question for the highest-leverage missing human input.
-- Runtime evidence: behavior that only a later sandbox execution can prove. Encode the responsible action, evidence, failure route, and retry or interrupt boundary; do not claim it already passed.
+- Runtime evidence: behavior that only a later sandbox execution can prove. Define how the Result package will carry the observed evidence; do not claim it already passed.
 
-Every failure, missing artifact, absent evidence, ended agent turn, and tool error must lead to an explicit repair, retry, durable update, human interrupt, or completion transition. Do not leave a silent stop. Explain the next action concisely.`;
+Keep setup, retry, interrupted-session recovery, human interruption, and completion acceptance in runtime policy rather than duplicating them as outgoing states from every domain step. Explain the next action concisely.`;
 
 type AgentName = "codex" | "claude";
 
@@ -81,9 +81,15 @@ type TestResolutionStatus = "idle" | "working" | "finished";
 type FlowZoom = 0 | 1 | 2;
 
 const FLOW_ZOOM_LABEL: Record<FlowZoom, string> = {
-  0: "Map",
-  1: "Decisions",
+  0: "Loop",
+  1: "Handoffs",
   2: "Details",
+};
+
+const FLOW_ZOOM_DESCRIPTION: Record<FlowZoom, string> = {
+  0: "Project stages only",
+  1: "Stage summaries and named handoffs",
+  2: "Full instructions, evidence, and exit rules",
 };
 
 const STATE_KIND_LABEL: Record<StateKind, string> = {
@@ -142,7 +148,7 @@ function splitLines(value: string) {
 function handoffSummary(items: string[]) {
   if (!items.length) return "No named artifact handoff";
   const productArtifacts = items.filter(
-    (item) => !/checkpoint|recovery record/i.test(item),
+    (item) => !/checkpoint|recovery record|run cursor/i.test(item),
   );
   const visible = productArtifacts.length ? productArtifacts : items;
   if (visible.length <= 2) return visible.join(" + ");
@@ -470,7 +476,6 @@ function StateFlowCanvas({
   editing,
   disabled,
   currentWiringStep,
-  testedTransitionIds,
   onZoomChange,
   onFocus,
   onEdit,
@@ -486,7 +491,6 @@ function StateFlowCanvas({
   editing: "overview" | string | null;
   disabled: boolean;
   currentWiringStep: WiringTestStep | null;
-  testedTransitionIds: string[];
   onZoomChange: (zoom: FlowZoom) => void;
   onFocus: (stateId: string) => void;
   onEdit: (stateId: string) => void;
@@ -496,11 +500,16 @@ function StateFlowCanvas({
   onAddStep: () => void;
 }) {
   const stateById = new Map(loop.states.map((state) => [state.id, state]));
-  const sequenceIds = new Set(sequence.states.map((state) => state.id));
-  const otherStates = loop.states.filter((state) => !sequenceIds.has(state.id));
+  const cycleStartIndex = sequence.loopBack?.targetIndex ?? 0;
+  const domainStates = sequence.loopBack
+    ? sequence.states.slice(cycleStartIndex)
+    : sequence.states;
+  const domainIds = new Set(domainStates.map((state) => state.id));
+  const setupStates = sequence.states.slice(0, cycleStartIndex);
+  const runtimeStates = loop.states.filter((state) => !domainIds.has(state.id));
   const focusedState =
-    loop.states.find((state) => state.id === focusedStateId) ??
-    sequence.states[0] ??
+    domainStates.find((state) => state.id === focusedStateId) ??
+    domainStates[0] ??
     loop.states[0];
 
   const changeZoom = (direction: -1 | 1) => {
@@ -515,12 +524,22 @@ function StateFlowCanvas({
     return target ? stateHandoff(source, target) : [];
   };
 
+  const handoffRole = (source: LoopState) => {
+    if (source.kind === "decide") return "Work contract";
+    if (source.kind === "act") return "Result package";
+    if (source.kind === "evaluate" || source.kind === "update") {
+      return "Integrated state";
+    }
+    return "Handoff";
+  };
+
   return (
     <>
       <div className="flow-toolbar">
         <div>
-          <span className="eyebrow">State flow</span>
-          <h3>One handoff pipeline, with decisions beside it</h3>
+          <span className="eyebrow">Recurring project loop</span>
+          <h3>{loop.name}</h3>
+          <p>{FLOW_ZOOM_DESCRIPTION[zoom]}</p>
         </div>
         <div className="flow-zoom" aria-label="Change flow detail level">
           <button
@@ -544,24 +563,19 @@ function StateFlowCanvas({
       </div>
 
       <div
-        className={`flow-canvas flow-level-${zoom}`}
-        aria-label={`Loop flow at ${FLOW_ZOOM_LABEL[zoom].toLowerCase()} detail`}
+        className={`flow-canvas flow-level-${zoom} ${sequence.loopBack ? "has-loop-return" : ""}`}
+        aria-label={`Deliverable loop at ${FLOW_ZOOM_LABEL[zoom].toLowerCase()} detail`}
       >
         <ol className="flow-spine">
-          {sequence.states.map((state, index) => {
+          {domainStates.map((state, index) => {
             const link = sequence.links.find((item) => item.sourceId === state.id);
             const usualTransition =
               link?.transition ??
               (sequence.loopBack?.sourceId === state.id
                 ? sequence.loopBack.transition
                 : null);
-            const alternateTransitions = state.transitions.filter(
-              (transition) => !sequence.chosenTransitionIds.has(transition.id),
-            );
             const isFocused = focusedState?.id === state.id;
             const isCycleStart = sequence.loopBack?.targetId === state.id;
-            const isFirstPass =
-              sequence.loopBack !== null && index < sequence.loopBack.targetIndex;
             const isTestSource = currentWiringStep?.sourceId === state.id;
             const isTestTarget = currentWiringStep?.targetId === state.id;
             const handoff = link
@@ -580,57 +594,16 @@ function StateFlowCanvas({
                   >
                     <span className="flow-state-number">{index + 1}</span>
                     <span className="flow-state-copy">
-                      <small>{STATE_KIND_LABEL[state.kind]}</small>
+                      {zoom > 0 && <small>{STATE_KIND_LABEL[state.kind]}</small>}
                       <strong>{state.name}</strong>
-                      {zoom === 2 && <em>{state.summary}</em>}
+                      {zoom > 0 && <em>{state.summary}</em>}
                     </span>
-                    {(isCycleStart || isFirstPass) && (
+                    {isCycleStart && (
                       <span className="flow-state-tag">
-                        {isCycleStart ? "Loop starts" : "Setup"}
+                        Loop starts
                       </span>
                     )}
                   </button>
-
-                  {zoom === 0 && alternateTransitions.length > 0 && (
-                    <button
-                      className="flow-choice-count"
-                      onClick={() => {
-                        onFocus(state.id);
-                        onZoomChange(1);
-                      }}
-                      type="button"
-                    >
-                      ◇ {state.transitions.length} paths
-                    </button>
-                  )}
-
-                  {zoom > 0 && alternateTransitions.length > 0 && (
-                    <div className="flow-branches" aria-label={`Alternate paths from ${state.name}`}>
-                      {alternateTransitions.map((transition) => {
-                        const isTesting =
-                          currentWiringStep?.transition.id === transition.id;
-                        const wasTested = testedTransitionIds.includes(transition.id);
-                        return (
-                          <button
-                            className={`${isTesting ? "is-testing" : ""} ${wasTested ? "was-tested" : ""}`}
-                            key={transition.id}
-                            onClick={() => onFocus(transition.to)}
-                            type="button"
-                          >
-                            <span aria-hidden="true">↳</span>
-                            <span>
-                              <small>
-                                {zoom === 2
-                                  ? transition.when
-                                  : TRANSITION_KIND_LABEL[transition.kind]}
-                              </small>
-                              <strong>{describeTarget(transition)}</strong>
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
                 </div>
 
                 {link && (
@@ -638,13 +611,15 @@ function StateFlowCanvas({
                     className={`flow-connector ${currentWiringStep?.transition.id === link.transition.id ? "is-testing" : ""}`}
                   >
                     <span aria-hidden="true">↓</span>
-                    <div className={handoff.length ? "" : "is-missing"}>
-                      <strong>Handoff</strong>
-                      <small>{handoffSummary(handoff)}</small>
-                      {zoom === 2 && usualTransition && (
-                        <em>{usualTransition.when}</em>
-                      )}
-                    </div>
+                    {zoom > 0 && (
+                      <div className={`${handoff.length ? "" : "is-missing"} ${state.kind === "act" ? "is-result" : ""}`}>
+                        <strong>{handoffSummary(handoff)}</strong>
+                        {zoom === 2 && <small>{handoffRole(state)}</small>}
+                        {zoom === 2 && usualTransition && (
+                          <em>{usualTransition.when}</em>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </li>
@@ -655,20 +630,22 @@ function StateFlowCanvas({
         {sequence.loopBack ? (
           <button
             className={`flow-loop-return ${currentWiringStep?.transition.id === sequence.loopBack.transition.id ? "is-testing" : ""}`}
+            aria-label={`Loop back to ${stateById.get(sequence.loopBack.targetId)?.name}`}
             onClick={() => onFocus(sequence.loopBack!.targetId)}
             type="button"
           >
-            <span aria-hidden="true">↺</span>
-            <span>
-              <strong>
-                Return to {stateById.get(sequence.loopBack.targetId)?.name}
-              </strong>
-              <small>
-                Handoff: {handoffSummary(describeHandoff(
+            <span className="flow-loop-return-arrow" aria-hidden="true">←</span>
+            <span className="flow-loop-return-copy">
+              <strong>Back to step {sequence.loopBack.targetIndex + 1}</strong>
+              {zoom > 0 && <small>
+                {handoffSummary(describeHandoff(
                   stateById.get(sequence.loopBack.sourceId)!,
                   sequence.loopBack.targetId,
                 ))}
-              </small>
+              </small>}
+              {zoom === 2 && (
+                <em>{handoffRole(stateById.get(sequence.loopBack.sourceId)!)}</em>
+              )}
               {zoom === 2 && <em>{sequence.loopBack.transition.when}</em>}
             </span>
           </button>
@@ -676,29 +653,45 @@ function StateFlowCanvas({
           <div className="flow-loop-missing">The route does not return yet.</div>
         )}
 
-        {otherStates.length > 0 && (
-          <div className="flow-edge-states">
-            <span>Edge states</span>
-            <div>
-              {otherStates.map((state) => (
-                <button
-                  className={`${focusedState?.id === state.id ? "is-focused" : ""} ${currentWiringStep?.sourceId === state.id ? "is-test-source" : ""} ${currentWiringStep?.targetId === state.id ? "is-test-target" : ""}`}
-                  key={state.id}
-                  onClick={() => onFocus(state.id)}
-                  type="button"
-                >
-                  <small>{STATE_KIND_LABEL[state.kind]}</small>
-                  <strong>{state.name}</strong>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
 
-      {focusedState && (
-        <section className={`flow-focus flow-focus-level-${zoom}`}>
-          {zoom === 2 && editing === focusedState.id ? (
+      {(loop.boundaries.length > 0 || runtimeStates.length > 0) && (
+        <details className="flow-runtime-policies">
+          <summary>
+            <span>Runtime safeguards</span>
+            <small>Setup, recovery, human, budget, and completion stay outside the result loop</small>
+          </summary>
+          <div>
+            {loop.boundaries.map((boundary) => (
+              <div key={boundary.id}>
+                <strong>{boundary.name}</strong>
+                <small>{zoom === 2 ? boundary.description : boundary.kind}</small>
+              </div>
+            ))}
+            {setupStates.length > 0 && (
+              <div>
+                <strong>First-time setup</strong>
+                <small>{setupStates.map((state) => state.name).join(" · ")}</small>
+              </div>
+            )}
+            {runtimeStates.filter((state) => !setupStates.some((setup) => setup.id === state.id)).length > 0 && (
+              <div>
+                <strong>Runtime handlers</strong>
+                <small>
+                  {runtimeStates
+                    .filter((state) => !setupStates.some((setup) => setup.id === state.id))
+                    .map((state) => state.name)
+                    .join(" · ")}
+                </small>
+              </div>
+            )}
+          </div>
+        </details>
+      )}
+
+      {focusedState && zoom === 2 && (
+        <section className="flow-focus flow-focus-level-2">
+          {editing === focusedState.id ? (
             <StateEditor
               disabled={disabled}
               onCancel={onCancelEdit}
@@ -712,7 +705,7 @@ function StateFlowCanvas({
                 <div>
                   <span>{STATE_KIND_LABEL[focusedState.kind]}</span>
                   <strong>{focusedState.name}</strong>
-                  {zoom > 0 && <p>{focusedState.summary}</p>}
+                  <p>{focusedState.summary}</p>
                 </div>
                 <div>
                   <button onClick={() => onDiscuss(focusedState.id)} type="button">
@@ -730,10 +723,7 @@ function StateFlowCanvas({
                 </div>
               </div>
 
-              {zoom === 0 && <small>Zoom in to see decisions and state details.</small>}
-
-              {zoom === 2 && (
-                <div className="flow-contract">
+              <div className="flow-contract">
                   <div className="flow-contract-inputs">
                     <span>Input handoff</span>
                     <ul>
@@ -743,7 +733,7 @@ function StateFlowCanvas({
                     </ul>
                   </div>
                   <div className="flow-contract-outputs">
-                    <span>Output handoff</span>
+                    <span>{focusedState.kind === "act" ? "Result package" : "Output handoff"}</span>
                     <ul>
                       {(focusedState.writes.length ? focusedState.writes : ["Nothing declared"]).map(
                         (item) => <li key={item}>{item}</li>,
@@ -759,7 +749,7 @@ function StateFlowCanvas({
                     <p>{focusedState.completion}</p>
                   </div>
                   <div className="flow-contract-paths">
-                    <span>Next decisions</span>
+                    <span>Exit outcomes</span>
                     {focusedState.transitions.length ? (
                       focusedState.transitions.map((transition) => (
                         <button
@@ -777,8 +767,7 @@ function StateFlowCanvas({
                       <p>No next state. This is an accepted outcome.</p>
                     )}
                   </div>
-                </div>
-              )}
+              </div>
             </>
           )}
         </section>
@@ -791,7 +780,7 @@ function StateFlowCanvas({
           onClick={onAddStep}
           type="button"
         >
-          + Add a state before the loop repeats
+          + Add a domain step before the loop repeats
         </button>
       )}
     </>
@@ -912,12 +901,15 @@ export function LoopStudio({
       setFocusedFlowStateId(null);
       return;
     }
+    const domainStates = sequence?.loopBack
+      ? sequence.states.slice(sequence.loopBack.targetIndex)
+      : sequence?.states ?? loop.states;
     setFocusedFlowStateId((current) =>
-      current && loop.states.some((state) => state.id === current)
+      current && domainStates.some((state) => state.id === current)
         ? current
-        : loop.startState,
+        : domainStates[0]?.id ?? loop.startState,
     );
-  }, [loop]);
+  }, [loop, sequence]);
 
   const rememberUiMessage = (role: "loopit" | "error", text: string) => {
     void fetch(`${DAEMON_URL}/api/conversation`, {
@@ -1220,6 +1212,11 @@ export function LoopStudio({
             .map((transition) => ({ state, transition })),
         )
       : [];
+  const domainStateCount = sequence
+    ? sequence.loopBack
+      ? sequence.states.length - sequence.loopBack.targetIndex
+      : sequence.states.length
+    : 0;
   const stateById = new Map(loop?.states.map((state) => [state.id, state]) ?? []);
 
   const wiringTestSteps: WiringTestStep[] = sequence
@@ -1610,7 +1607,7 @@ export function LoopStudio({
                         : "Loop closes"}
                     </strong>
                     <span>
-                      {loop.states.length} states · {otherTransitions.length} choices
+                      {domainStateCount} project stages · named handoffs
                     </span>
                   </div>
                 </div>
@@ -1637,7 +1634,6 @@ export function LoopStudio({
                   onSave={(state) => void saveState(state)}
                   onZoomChange={setFlowZoom}
                   sequence={sequence}
-                  testedTransitionIds={testedTransitionIds}
                   zoom={flowZoom}
                 />
 
@@ -1663,8 +1659,8 @@ export function LoopStudio({
                   <div className="flow-test-content">
                     <div className="test-lab-heading">
                       <p>
-                        Trace the wiring in seconds, then ask a fresh local agent
-                        to challenge the contracts and edge cases.
+                        Trace the result handoffs in seconds, then ask a fresh local
+                        agent to consume them without conversation context.
                       </p>
                       <div className="test-lab-actions">
                         <button
@@ -1680,7 +1676,7 @@ export function LoopStudio({
                           {wiringTestStatus === "passed" ||
                           wiringTestStatus === "failed"
                             ? "Trace again"
-                            : "Trace every path"}
+                            : "Trace handoffs"}
                         </button>
                         {isAgentTesting ? (
                           <button

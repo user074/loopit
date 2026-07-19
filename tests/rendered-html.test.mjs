@@ -49,8 +49,8 @@ test("server-renders the Loopit construction studio", async () => {
   assert.match(html, /New conversation/);
   assert.match(html, /\+ New/);
   assert.match(html, /History/);
-  assert.match(html, /No loop yet|One handoff pipeline, with decisions beside it/);
-  assert.match(html, /Construct my first loop|Trace every path/);
+  assert.match(html, /No loop yet|Recurring project loop/);
+  assert.match(html, /Construct my first loop|Trace handoffs/);
   assert.doesNotMatch(html, /codex-preview/);
   assert.doesNotMatch(html, /Your site is taking shape/);
 });
@@ -69,7 +69,18 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.doesNotMatch(packageJson, /react-loading-skeleton/);
   assert.doesNotMatch(page, /_sites-preview|SkeletonPreview/);
   assert.match(studio, /FLOW_ZOOM_LABEL/);
-  assert.match(studio, /One handoff pipeline, with decisions beside it/);
+  assert.match(studio, /FLOW_ZOOM_DESCRIPTION/);
+  assert.match(studio, /Recurring project loop/);
+  assert.match(studio, /Result package/);
+  assert.match(studio, /Runtime safeguards/);
   assert.match(studio, /No named artifact handoff/);
-  assert.match(studio, /Zoom in to see decisions and state details/);
+  assert.match(studio, /Project stages only/);
+  assert.match(studio, /Stage summaries and named handoffs/);
+  assert.match(studio, /Full instructions, evidence, and exit rules/);
+  assert.match(studio, /flow-loop-return-arrow/);
+  assert.match(studio, /Back to step/);
+  assert.match(
+    studio,
+    /zoom > 0[\s\S]*handoffSummary\(handoff\)[\s\S]*zoom === 2[\s\S]*handoffRole\(state\)/,
+  );
 });

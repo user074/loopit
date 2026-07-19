@@ -13,7 +13,7 @@ This version focuses only on the first product problem: working with an agent to
 The screen has two connected parts:
 
 - **Construction chat** launches the Codex or Claude Code CLI already installed and authenticated on the local machine. A new project begins empty: the agent first asks what work the user wants to keep progressing, then proposes the smallest useful loop. Conversations survive reloads as local Markdown files in `.loopit/conversations/`. **New** starts with an empty agent session, while **History** reopens a past conversation together with its own resumable CLI context.
-- **Visual loop editor** presents one simple flow spine with decisions beside the state that owns them, rather than a tangled graph. Semantic zoom moves between a shape-only map, visible decisions, and the full contract for one selected state. The user can edit the objective, completion policy, state contracts, and transitions directly; every visual save rewrites `.loopit/loop.md`, which the agent reads on its next turn.
+- **Visual loop editor** presents only the recurring domain loop and the deliverable passed at each handoff. Semantic zoom moves from the general loop, to named handoffs, to the full result contract for one selected step. Setup and runtime safeguards stay in a separate collapsed view. The user can edit the objective, completion policy, state contracts, and transitions directly; every visual save rewrites `.loopit/loop.md`, which the agent reads on its next turn.
 - **Preflight testing** can trace every transition in seconds, visibly prove that the recurrence closes, and then launch a fresh read-only local agent to challenge state contracts and edge cases. The rehearsal cannot modify or execute the project; its latest Markdown report is saved at `.loopit/test-report.md`. A non-passing result automatically becomes the next construction turn: the agent repairs agent-owned gaps and asks one focused question for missing human intent or authority.
 
 Requirements: Node.js 22.13 or newer and at least one locally authenticated agent CLI (`codex` or `claude`). No separate API key or hosted Loopit account is used.
@@ -52,49 +52,71 @@ The product develops in two stages:
 
 ## What is a loop?
 
-A loop is a durable feedback system that turns unresolved differences between an objective and the current state into evidence-producing actions, updates its state from the evidence, and continues until an explicit boundary is reached.
+A loop is a durable feedback system that repeatedly turns an unresolved frontier item into a portable result, integrates that result into shared state, and selects what should happen next.
+
+The following is Loopit's **construction invariant**, not a workflow template and not the language shown to the user:
 
 ```text
-Objective
-   ↓
-Read current state
-   ↓
-Generate unresolved frontier
-   ↓
-Choose the highest-value item
-   ↓
-Take a bounded action
-   ↓
-Observe and evaluate evidence
-   ↓
-Update durable state
-   ↓
-Continue, complete, or interrupt
+State + frontier
+      ↓ select and define
+Work contract
+      ↓ execute
+Result package
+      ↓ interpret and integrate
+Updated state + frontier
+      ↺
 ```
+
+The construction agent uses this invariant to check continuity, then translates it into the project's own work cycle. A research user should see hypotheses, experiments, evidence, and belief updates. A product builder should see capability gaps, feature slices, working builds, and product decisions. If the right panel still says only “work contract” and “result package” after the domain is understood, construction is not finished.
 
 A prompt requests an action. A plan anticipates steps. A workflow follows predefined transitions. A loop observes what happened, judges what it means, updates its model of the work, and derives what should happen next.
 
 ## The minimal loop contract
 
-Every loop needs:
+Every domain loop needs:
 
 - **Objective** — the outcome the loop is trying to advance.
 - **Durable state** — a compressed, inspectable representation of what is currently true.
 - **Frontier** — gaps, uncertainties, failures, missing evidence, or opportunities that justify more work.
-- **Action policy** — how the next frontier item is selected under cost, risk, and permission constraints.
-- **Evidence** — observable results and artifacts produced by an action.
-- **Evaluation** — judgment about whether the action helped and what the evidence means.
-- **State transition** — an explicit update to state, frontier, and next action.
-- **Boundaries** — the conditions for continuing, completing, requesting a decision, becoming blocked, or exhausting a budget.
+- **Work contract** — one bounded unit of work, its inputs, intended deliverable, and acceptance evidence.
+- **Result package** — the portable handoff containing the deliverable, evidence, outcome, provenance, and unresolved findings.
+- **Integration policy** — how a result changes durable state, resolves or creates frontier items, and selects another contract.
 
-The loop engine can remain consistent across domains. What changes is the content of state, the source of frontier items, the available evaluators, and the definition of sufficient progress.
+The loop engine can remain consistent across domains, but the loop structure does not have to. Its visible stages should match the natural transformations and handoffs of the work. Split a stage only when it produces a meaningful deliverable for a different consumer or kind of judgment; combine stages when separating them would add ceremony without a useful handoff.
 
-| Domain | Durable state | Frontier | Evidence |
-|---|---|---|---|
-| Research | Beliefs and current understanding | Uncertain hypotheses | Experimental results |
-| Software engineering | Implementation and verified acceptance criteria | Defects, unmet criteria, and missing verification | Tests, runtime behavior, and review findings |
-| Design | Current design and user needs | Usability gaps and unresolved alternatives | Evaluations, comparisons, and user feedback |
-| Operations | System health and targets | Incidents, anomalies, and capacity risks | Metrics, traces, and interventions |
+| Work | Concrete recurring loop | Portable handoff |
+|---|---|---|
+| Research | Hypothesis frontier → experiment plan → run and collect data → analyze and validate or invalidate → update beliefs and add hypotheses ↺ | Experiment report with data, plots, verdict, confounds, and new hypotheses |
+| Independent app development | User or capability gap → feature-slice brief → working build and tests → product review → update capability map and next slice ↺ | Feature result with build or commit, checks, observed behavior, limitations, and follow-ups |
+| Software engineering | Issue and acceptance frontier → change plan → implementation → CI and review → integrate verified system state and backlog ↺ | Change result with commit or pull request, diff, tests, review evidence, environment, and known issues |
+| UI/UX design | User need or design question → exploration brief → prototype or design version → usability evaluation → design decision and next question ↺ | Design evaluation packet with prototype, rationale, comparisons, findings, and open questions |
+| Business | Opportunity or decision frontier → analysis or action brief → proposal, campaign, or operating decision → measure outcome → update business model and priorities ↺ | Decision or outcome packet with sources, assumptions, metrics, risks, and recommended follow-up |
+
+These are examples, not preset templates. The construction agent should inspect the actual project and propose the smallest concrete loop that fits it. The user then corrects its phases, handoffs, and priorities before verification.
+
+### The result package is the unit of handoff
+
+The result is more important than the agent or session that produced it. A useful result can move between a worker and supervisor, between specialized agents, across context resets, or between human teams without relying on a hidden conversation.
+
+A result package is a thin envelope around the domain's natural deliverable. “Result package” is the engine's generic type; the actual artifact should use the domain's language, such as **Experiment report**, **Feature result**, **Change result**, or **Design evaluation packet**. It normally identifies:
+
+- The work contract and prior-state version it answers.
+- The native deliverable or stable reference to it.
+- Observable evidence and checks.
+- Outcome: completed, partial, failed, or blocked. Negative results remain valid results.
+- What changed, what remains unresolved, and candidate follow-up work.
+- Provenance needed for another agent or human to inspect and continue.
+
+Loopit should first search the existing project and work history for native handoffs—reports, commits, pull requests, tickets, design versions, spreadsheets, CRM records, decision memos, or other established deliverables. It should add documentation only when the native artifact lacks context required by its next consumer.
+
+### Domain loop and runtime policy are separate
+
+The visible loop describes how domain results advance work. Setup, retries, interrupted-session recovery, permissions, budgets, human decisions, and completion acceptance are runtime policies around that loop. They should not become repeated states or branches unless they are themselves meaningful domain work.
+
+- **Setup** prepares the initial durable state before the loop begins.
+- **Recovery** resumes the current operation from durable artifacts; it does not own a domain handoff.
+- **Human interruption** fires only when policy requires judgment and no authorized work can continue.
+- **Completion challenge** is an optional acceptance protocol invoked for a candidate outcome, not an ordinary step in every iteration.
 
 ## Stage 1: construct and prove a loop
 
@@ -107,34 +129,36 @@ The user should not need to place nodes or write a loop specification manually. 
 1. Inspect the existing project, tools, documents, and environment.
 2. Present its understanding for correction.
 3. Clarify the objective, success conditions, constraints, and available resources.
-4. Identify what should be durable state and which artifacts are authoritative.
-5. Propose how frontier items are created and ranked.
-6. Define how actions are evaluated and how evidence changes state.
-7. Define autonomy, interruption, budget, recovery, and completion boundaries.
-8. Generate the loop and ask the user to confirm the important choices.
+4. Infer the work's natural recurring cycle rather than imposing generic phases.
+5. Identify its existing deliverables, the producer and consumer of each handoff, and the judgment each handoff enables.
+6. Give every visible phase and artifact a concrete project-specific name.
+7. Define the smallest domain-named result package that makes the primary deliverable inspectable and portable across agents and sessions.
+8. Identify durable state, the frontier, and how an integrated result changes both.
+9. Propose the smallest coherent concrete loop for the user to correct; do not ask the user to design it from scratch.
+10. Define runtime policies for autonomy, interruption, budget, recovery, and completion separately from the domain loop.
+11. Generate the edited loop, ask the user to confirm the important choices, and run a fresh-session rehearsal.
 
 ### Prove continuity
 
 A circular diagram does not prove that a loop works. Loopit should execute controlled iterations and verify that:
 
 - Current state can produce a justified action.
-- The action produces inspectable evidence.
-- The evidence is evaluated rather than merely recorded.
-- Durable state and the frontier are updated.
+- The work contract produces a valid, portable result package.
+- A fresh consumer can inspect the deliverable and evidence without hidden chat context.
+- The result is interpreted and integrated into durable state rather than merely recorded.
 - A valid next action or explicit terminal state is produced.
 - A fresh agent session can resume from the saved state.
 - Failures lead to bounded recovery or escalation instead of silent termination.
 
-The minimal continuity test is:
+The minimal continuity test below uses engine language. The rehearsal should trace the actual domain-named artifacts that occupy each role:
 
 ```text
-state before
-  → bounded work
-  → evidence
-  → judgment
-  → state after
-  → next action
-  → resume in a fresh session
+state + frontier
+  → work contract
+  → result package
+  → integrated state + frontier
+  → next work contract
+  → consume the result in a fresh session
 ```
 
 The 24-hour goal is not simply keeping a process alive. The loop must make meaningful, evidence-backed transitions, recover from expected failures, survive session boundaries, and stop only for a declared reason.
@@ -143,25 +167,26 @@ The 24-hour goal is not simply keeping a process alive. The loop must make meani
 
 Loopit should be able to validate a small set of universal rules:
 
-1. No action without a frontier item.
-2. No completed iteration without evidence.
-3. No evidence without evaluation.
-4. No iteration ends before durable state is updated.
-5. No continuation without a justified next action.
-6. No stopping except at an explicit boundary.
-7. Every saved state must be resumable by a fresh agent session.
+1. No work contract without a frontier item.
+2. No completed iteration without a result package.
+3. No result package without an inspectable deliverable or explicit failed or blocked outcome.
+4. No result is complete until its consumer can interpret it without hidden chat context.
+5. No iteration ends before the result is integrated into durable state and the frontier.
+6. No continuation without a justified next work contract.
+7. No stopping except at a runtime boundary.
+8. Every saved result and state must be consumable by a fresh agent session.
 
 The runtime, not an individual agent response, owns continuation. An agent finishing a turn does not mean the mission is complete.
 
-### Completion is a challenged decision
+### Completion is a runtime acceptance policy
 
 Loopit separates three things that agents often collapse together:
 
 1. **State complete** — this bounded action produced the evidence needed to leave its current state.
 2. **Candidate complete** — the current evidence appears to satisfy the project objective.
-3. **Accepted outcome** — a fresh challenger tried to disprove the candidate, every blocking gap has a next action, and the loop's completion policy allows acceptance.
+3. **Accepted outcome** — the configured runtime policy has challenged or reviewed the candidate and permits acceptance.
 
-The challenger is part of the loop, not a final summary prompt. It classifies each new thought before deciding what happens next:
+A challenger can be invoked when integration produces a completion candidate, without becoming a permanent domain-loop state. It classifies each new thought before the runtime decides what happens next:
 
 - An agent-owned blocking gap returns to the active frontier.
 - Missing human intent, preference, fact, or authority becomes one focused question.
@@ -248,23 +273,24 @@ The main interface has two synchronized sides:
 └─────────────────────────────┴──────────────────────────────────────┘
 ```
 
-The left side is how the user constructs and modifies the loop with an agent. The right side is not a manual workflow canvas. It is an inspectable representation of what the agent constructed and proof that the loop can continue.
+The left side is how the user constructs and modifies the loop with an agent. The right side is not a generic workflow template. Its default view shows the proposed project-specific cycle using concrete phase and deliverable names. The generic State → Work contract → Result package → Integrated state model is only a construction and validation guideline. Zooming in reveals how each concrete handoff satisfies that contract. Setup and runtime safeguards live in a separate, collapsed policy view.
 
-The right side should initially answer five questions:
+The right side should initially answer six questions:
 
 1. Where is the loop now?
 2. What state did this iteration begin with?
-3. What work and evidence were produced?
-4. How did the state and frontier change?
-5. Is there a valid next iteration, or why did the loop stop?
+3. What result package was produced, and where is its deliverable?
+4. Could another agent or human consume it without hidden context?
+5. How did the result change state and the frontier?
+6. Is there a valid next iteration, or which runtime boundary fired?
 
 ## Reference implementation
 
 [`delta-research`](https://github.com/user074/delta-research) is the first working reference for these ideas. Its research loop maintains beliefs, a run ledger, an experiment frontier, plans, reports, and a human-facing synthesis. Each completed experiment updates the belief state and creates or reprioritizes the next research delta.
 
-Its important lesson is that producing a report is not the end of an iteration. The iteration ends only after the report has been evaluated, durable state has been compressed, and a next action or valid interrupt has been selected.
+Its important lesson is that `REPORT.md` is the portable handoff between worker and supervisor. The report packages the experiment's deliverable, data, verdict, confounds, and proposed follow-up work. The iteration ends only after the supervisor consumes that package, compresses durable state, and selects another contract or a valid interrupt.
 
-For software engineering, the same mechanism can use acceptance criteria and observed system behavior instead of research beliefs. Tests, runtime inspection, and review findings create a frontier of unmet criteria, defects, and missing verification. The agent continues resolving that frontier until the agreed outcome is supported by evidence.
+For software engineering, the native deliverable may be a commit, pull request, working feature, migration, or testable build. The result package adds the contract it answers, diff or artifact reference, tests and runtime evidence, known limitations, and follow-up candidates. The next agent should be able to review, branch, test, integrate, or revise it without reconstructing the previous session.
 
 ## Non-goals for the initial product
 
