@@ -45,10 +45,10 @@ test("server-renders the Loopit construction studio", async () => {
 
   const html = await response.text();
   assert.match(html, /<title>Loopit — Construct agent loops<\/title>/i);
-  assert.match(html, /Construction studio/);
-  assert.match(html, /Construct the loop with an agent/);
-  assert.match(html, /Proposed loop/);
-  assert.match(html, /Loop validation/);
+  assert.match(html, /Construct a continuing loop/);
+  assert.match(html, /Build with your agent/);
+  assert.match(html, /No loop yet/);
+  assert.match(html, /Construct my first loop/);
   assert.doesNotMatch(html, /codex-preview/);
   assert.doesNotMatch(html, /Your site is taking shape/);
 });

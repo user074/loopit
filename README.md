@@ -12,8 +12,8 @@ This version focuses only on the first product problem: working with an agent to
 
 The screen has two connected parts:
 
-- **Construction chat** launches the Codex or Claude Code CLI already installed and authenticated on the local machine. The construction agent can inspect the project, but it is restricted to creating or updating `.loopit/loop.md`.
-- **Loop inspector** parses that Markdown into selectable states and guarded relations. Selecting a node or relation shows its reads, work instruction, writes, completion condition, and next transition. Deterministic checks flag unreachable states, dead ends, dangling transitions, missing continuation cycles, and cycles that fail to evaluate evidence or update durable state.
+- **Construction chat** launches the Codex or Claude Code CLI already installed and authenticated on the local machine. A new project begins empty: the agent first asks what work the user wants to keep progressing, then proposes the smallest useful loop. It is restricted to creating or updating `.loopit/loop.md`.
+- **Visual loop editor** presents the primary path as a numbered sequence with one explicit return point, following the same readable recurrence as Delta Research. Stops and alternate paths stay secondary. The user can edit the objective, step contracts, and transitions directly; every visual save rewrites `.loopit/loop.md`, which the agent reads on its next turn.
 
 Requirements: Node.js 22.13 or newer and at least one locally authenticated agent CLI (`codex` or `claude`). No separate API key or hosted Loopit account is used.
 
@@ -22,7 +22,7 @@ npm install
 npm run dev
 ```
 
-Then open [http://localhost:3000](http://localhost:3000). The web process and localhost-only agent daemon start together. Construction-agent sessions are remembered in `.loopit/session.json`; the proposed loop itself remains inspectable and versionable at `.loopit/loop.md`.
+Then open [http://localhost:3000](http://localhost:3000). The web process and localhost-only agent daemon start together. Choose **Construct my first loop** or describe the work directly in chat. Construction-agent sessions are remembered in `.loopit/session.json`; once a proposal exists, it is saved and versionable at `.loopit/loop.md`.
 
 Markdown is the durable agent-facing source of truth, not the primary human interface. Loopit parses it into an internal graph for deterministic checks and presents the understandable, interactive version in the web UI. No generated JSON copy is committed or maintained.
 

@@ -3,7 +3,10 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
-import { parseLoopMarkdown } from "../lib/loop-markdown.mjs";
+import {
+  parseLoopMarkdown,
+  serializeLoopMarkdown,
+} from "../lib/loop-markdown.mjs";
 
 const execFileAsync = promisify(execFile);
 const projectRoot = path.resolve(process.env.LOOPIT_PROJECT || process.cwd());
@@ -34,8 +37,19 @@ async function writeJson(file, value) {
   await rename(temporary, file);
 }
 
-async function readLoop() {
-  return parseLoopMarkdown(await readFile(loopPath, "utf8"));
+async function writeText(file, value) {
+  const temporary = `${file}.tmp`;
+  await writeFile(temporary, value, "utf8");
+  await rename(temporary, file);
+}
+
+async function readLoopOrNull() {
+  try {
+    return parseLoopMarkdown(await readFile(loopPath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 async function detectAgent(command) {
@@ -89,7 +103,9 @@ function constructionPrompt({ message, selectedElementId }) {
 
 Your only task is to help the user construct and debug a minimal continuing-work loop. You may inspect this repository and its README for context. You MUST only create or update .loopit/loop.md. Do not modify application code, documentation, configuration, or any other file. Do not execute the proposed loop.
 
-Read .loopit/loop.md before responding. Markdown is the only durable source of truth; never create a JSON copy. Preserve its constrained, readable structure:
+If .loopit/loop.md does not exist, this is first-time initialization. Do not treat the missing file as an error. If the user has not stated a concrete objective yet, ask one focused question about what work they want to keep progressing; do not invent or create a loop prematurely. Once the objective is clear enough, create the smallest useful proposal.
+
+When a loop exists, read .loopit/loop.md before responding. Markdown is the only durable source of truth; never create a JSON copy. Preserve its constrained, readable structure:
 - YAML front matter with loopit, revision, status, and start.
 - One H1 loop name and an H2 Objective.
 - H2 Artifacts and Boundaries, with H3 entries and bold ID, Kind, and Description fields.
@@ -335,8 +351,8 @@ async function streamConstruction(request, response) {
     }
 
     try {
-      const loop = await readLoop();
-      send({ type: "loop_updated", loop });
+      const loop = await readLoopOrNull();
+      if (loop) send({ type: "loop_updated", loop });
     } catch (error) {
       send({
         type: "error",
@@ -384,7 +400,33 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/api/loop") {
-      const loop = await readLoop();
+      const loop = await readLoopOrNull();
+      json(response, 200, { loop });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/loop") {
+      if (activeRun) {
+        json(response, 409, {
+          error: "Wait for the construction agent to finish before editing the loop.",
+        });
+        return;
+      }
+      const body = await readBody(request);
+      if (!body.loop || typeof body.loop !== "object") {
+        json(response, 400, { error: "A loop definition is required." });
+        return;
+      }
+      const current = await readLoopOrNull();
+      const candidate = {
+        ...body.loop,
+        schemaVersion: 1,
+        revision:
+          Math.max(Number(body.loop.revision) || 0, current?.revision ?? 0) + 1,
+      };
+      const markdown = serializeLoopMarkdown(candidate);
+      const loop = parseLoopMarkdown(markdown);
+      await writeText(loopPath, markdown);
       json(response, 200, { loop });
       return;
     }

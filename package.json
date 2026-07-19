@@ -15,7 +15,6 @@
     "lint": "eslint app lib scripts tests next.config.ts"
   },
   "dependencies": {
-    "@xyflow/react": "^12.11.2",
     "next": "16.2.6",
     "react": "19.2.6",
     "react-dom": "19.2.6"

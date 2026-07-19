@@ -45,7 +45,7 @@ Control-C
 
 The development wrapper sends a termination signal to both the web interface and the local-agent daemon. Closing the browser tab does not stop either process.
 
-Stopping Loopit preserves:
+Stopping Loopit preserves these files when they have been created:
 
 - `.loopit/loop.md`, the versionable, agent-readable loop proposal.
 - `.loopit/session.json`, the resumable local-agent session identifiers.

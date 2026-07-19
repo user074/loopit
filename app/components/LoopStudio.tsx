@@ -1,30 +1,20 @@
 "use client";
 
-import {
-  Background,
-  Controls,
-  MarkerType,
-  ReactFlow,
-  type Edge,
-  type Node,
-} from "@xyflow/react";
-import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   LoopDefinition,
   LoopState,
   LoopTransition,
   StateKind,
-  ValidationFinding,
+  TransitionKind,
 } from "@/lib/loop-types";
 import { validateLoop } from "@/lib/loop-validation";
 
 const DAEMON_URL = "http://127.0.0.1:4318";
+const START_CONSTRUCTION =
+  "Begin first-time loop construction. No loop exists yet. Ask me one focused question about what work I want to keep progressing before proposing any states.";
 
 type AgentName = "codex" | "claude";
-type SelectedElement =
-  | { type: "state"; id: string }
-  | { type: "transition"; id: string };
 
 interface AgentHealth {
   installed: boolean;
@@ -42,207 +32,412 @@ interface ChatMessage {
   id: string;
   role: "loopit" | "user" | "agent" | "error";
   text: string;
+  source?: AgentName;
 }
 
-const KIND_LABEL: Record<StateKind, string> = {
+interface SequenceLink {
+  sourceId: string;
+  targetId: string;
+  transition: LoopTransition;
+}
+
+interface LoopBack extends SequenceLink {
+  targetIndex: number;
+}
+
+interface PrimarySequence {
+  states: LoopState[];
+  links: SequenceLink[];
+  loopBack: LoopBack | null;
+  chosenTransitionIds: Set<string>;
+}
+
+const STATE_KIND_LABEL: Record<StateKind, string> = {
   observe: "Observe",
   decide: "Decide",
   act: "Act",
   evaluate: "Evaluate",
-  update: "Update",
-  interrupt: "Interrupt",
+  update: "Update state",
+  interrupt: "Ask human",
   terminal: "Complete",
 };
 
-const EDGE_COLOR = {
-  normal: "#82908a",
-  continue: "#2f8f62",
-  interrupt: "#c88736",
-  complete: "#6e7180",
+const TRANSITION_KIND_LABEL: Record<TransitionKind, string> = {
+  normal: "Continue",
+  continue: "Loop back",
+  interrupt: "Ask human",
+  complete: "Complete",
 };
 
 function newMessage(
   role: ChatMessage["role"],
   text: string,
+  source?: AgentName,
 ): ChatMessage {
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
     role,
     text,
+    source,
   };
 }
 
-function shortCondition(text: string) {
-  return text.length > 42 ? `${text.slice(0, 39)}…` : text;
-}
-
-function layoutStates(loop: LoopDefinition) {
+function primarySequence(loop: LoopDefinition): PrimarySequence {
   const stateMap = new Map(loop.states.map((state) => [state.id, state]));
-  const depth = new Map<string, number>();
-  const queue = stateMap.has(loop.startState)
-    ? [{ id: loop.startState, depth: 0 }]
-    : [];
+  const visited = new Map<string, number>();
+  const states: LoopState[] = [];
+  const links: SequenceLink[] = [];
+  const chosenTransitionIds = new Set<string>();
+  let loopBack: LoopBack | null = null;
+  let currentId: string | undefined = loop.startState;
 
-  while (queue.length) {
-    const item = queue.shift()!;
-    if (depth.has(item.id)) continue;
-    depth.set(item.id, item.depth);
-    const state = stateMap.get(item.id);
-    state?.transitions.forEach((transition) => {
-      if (!depth.has(transition.to) && transition.kind !== "continue") {
-        queue.push({ id: transition.to, depth: item.depth + 1 });
-      }
-    });
-  }
+  while (currentId && states.length <= loop.states.length) {
+    const state = stateMap.get(currentId);
+    if (!state || visited.has(currentId)) break;
 
-  let fallbackDepth = Math.max(0, ...depth.values()) + 1;
-  loop.states.forEach((state) => {
-    if (!depth.has(state.id)) depth.set(state.id, fallbackDepth++);
-  });
+    visited.set(currentId, states.length);
+    states.push(state);
 
-  const groups = new Map<number, LoopState[]>();
-  loop.states.forEach((state) => {
-    const level = depth.get(state.id) ?? 0;
-    groups.set(level, [...(groups.get(level) ?? []), state]);
-  });
+    const transition =
+      state.transitions.find((item) => item.kind === "continue") ??
+      state.transitions.find((item) => item.kind === "normal");
+    if (!transition) break;
 
-  const nodes: Node[] = [];
-  for (const [level, states] of [...groups.entries()].sort(
-    ([a], [b]) => a - b,
-  )) {
-    states.forEach((state, index) => {
-      nodes.push({
-        id: state.id,
-        position: {
-          x: level * 290,
-          y: index * 174 - ((states.length - 1) * 174) / 2,
-        },
-        className: `loop-node loop-node--${state.kind}`,
-        data: {
-          label: (
-            <div className="node-card">
-              <div className="node-card__meta">
-                <span>{KIND_LABEL[state.kind]}</span>
-                {state.id === loop.startState && <strong>Start</strong>}
-              </div>
-              <h3>{state.name}</h3>
-              <p>{state.summary}</p>
-              <div className="node-card__io">
-                <span>{state.reads.length} in</span>
-                <span>{state.writes.length} out</span>
-              </div>
-            </div>
-          ),
-        },
-      });
-    });
-  }
-
-  const edges: Edge[] = loop.states.flatMap((state) =>
-    state.transitions.map((transition) => ({
-      id: transition.id,
-      source: state.id,
-      target: transition.to,
-      label: shortCondition(transition.when),
-      type: "smoothstep",
-      animated: transition.kind === "continue",
-      className: `loop-edge loop-edge--${transition.kind}`,
-      markerEnd: {
-        type: MarkerType.ArrowClosed,
-        color: EDGE_COLOR[transition.kind],
-      },
-      style: {
-        stroke: EDGE_COLOR[transition.kind],
-        strokeWidth: transition.kind === "continue" ? 2.8 : 1.8,
-        strokeDasharray: transition.kind === "interrupt" ? "6 5" : undefined,
-      },
-      labelStyle: {
-        fill: "#56625e",
-        fontSize: 10,
-        fontWeight: 600,
-      },
-      labelBgStyle: {
-        fill: "#f7f6f1",
-        fillOpacity: 0.92,
-      },
-      data: { transition, sourceName: state.name },
-    })),
-  );
-
-  return { nodes, edges };
-}
-
-function selectionDetails(
-  loop: LoopDefinition,
-  selection: SelectedElement,
-) {
-  if (selection.type === "state") {
-    return {
-      state: loop.states.find((state) => state.id === selection.id) ?? null,
-      transition: null,
-      source: null,
-      target: null,
-    };
-  }
-
-  for (const state of loop.states) {
-    const transition = state.transitions.find(
-      (item) => item.id === selection.id,
-    );
-    if (transition) {
-      return {
-        state: null,
+    chosenTransitionIds.add(transition.id);
+    const targetIndex = visited.get(transition.to);
+    if (targetIndex !== undefined) {
+      loopBack = {
+        sourceId: state.id,
+        targetId: transition.to,
         transition,
-        source: state,
-        target:
-          loop.states.find((candidate) => candidate.id === transition.to) ??
-          null,
+        targetIndex,
       };
+      break;
     }
+
+    links.push({
+      sourceId: state.id,
+      targetId: transition.to,
+      transition,
+    });
+    currentId = transition.to;
   }
 
-  return { state: null, transition: null, source: null, target: null };
+  return { states, links, loopBack, chosenTransitionIds };
 }
 
-function FindingIcon({ severity }: Pick<ValidationFinding, "severity">) {
+function splitLines(value: string) {
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function OverviewEditor({
+  loop,
+  disabled,
+  onCancel,
+  onSave,
+}: {
+  loop: LoopDefinition;
+  disabled: boolean;
+  onCancel: () => void;
+  onSave: (next: LoopDefinition) => void;
+}) {
+  const [name, setName] = useState(loop.name);
+  const [objective, setObjective] = useState(loop.objective);
+
   return (
-    <span className={`finding-icon finding-icon--${severity}`} aria-hidden="true">
-      {severity === "pass" ? "✓" : severity === "warning" ? "!" : "×"}
-    </span>
+    <div className="inline-editor overview-editor">
+      <label>
+        Loop name
+        <input value={name} onChange={(event) => setName(event.target.value)} />
+      </label>
+      <label>
+        Objective
+        <textarea
+          rows={4}
+          value={objective}
+          onChange={(event) => setObjective(event.target.value)}
+        />
+      </label>
+      <div className="editor-actions">
+        <button className="button-secondary" onClick={onCancel} type="button">
+          Cancel
+        </button>
+        <button
+          className="button-primary"
+          disabled={disabled || !name.trim() || !objective.trim()}
+          onClick={() =>
+            onSave({ ...loop, name: name.trim(), objective: objective.trim() })
+          }
+          type="button"
+        >
+          Save changes
+        </button>
+      </div>
+    </div>
   );
 }
 
-export function LoopStudio({ initialLoop }: { initialLoop: LoopDefinition }) {
-  const [loop, setLoop] = useState(initialLoop);
+function StateEditor({
+  state,
+  states,
+  disabled,
+  onCancel,
+  onSave,
+}: {
+  state: LoopState;
+  states: LoopState[];
+  disabled: boolean;
+  onCancel: () => void;
+  onSave: (state: LoopState) => void;
+}) {
+  const [draft, setDraft] = useState<LoopState>(() => structuredClone(state));
+
+  const updateTransition = (
+    index: number,
+    update: Partial<LoopTransition>,
+  ) => {
+    setDraft((current) => ({
+      ...current,
+      transitions: current.transitions.map((transition, itemIndex) =>
+        itemIndex === index ? { ...transition, ...update } : transition,
+      ),
+    }));
+  };
+
+  const addTransition = () => {
+    const target = states.find((item) => item.id !== state.id) ?? states[0];
+    if (!target) return;
+    setDraft((current) => ({
+      ...current,
+      transitions: [
+        ...current.transitions,
+        {
+          id: `${current.id}-to-${target.id}-${current.transitions.length + 1}`,
+          to: target.id,
+          when: "This step is complete",
+          kind: "normal",
+        },
+      ],
+    }));
+  };
+
+  return (
+    <div className="inline-editor state-editor">
+      <div className="field-grid">
+        <label>
+          Step name
+          <input
+            value={draft.name}
+            onChange={(event) =>
+              setDraft((current) => ({ ...current, name: event.target.value }))
+            }
+          />
+        </label>
+        <label>
+          Step type
+          <select
+            value={draft.kind}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                kind: event.target.value as StateKind,
+              }))
+            }
+          >
+            {Object.entries(STATE_KIND_LABEL).map(([value, label]) => (
+              <option key={value} value={value}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <label>
+        Short explanation
+        <input
+          value={draft.summary}
+          onChange={(event) =>
+            setDraft((current) => ({ ...current, summary: event.target.value }))
+          }
+        />
+      </label>
+      <label>
+        What happens in this step?
+        <textarea
+          rows={3}
+          value={draft.instruction}
+          onChange={(event) =>
+            setDraft((current) => ({
+              ...current,
+              instruction: event.target.value,
+            }))
+          }
+        />
+      </label>
+      <label>
+        How do we know it is done?
+        <textarea
+          rows={2}
+          value={draft.completion}
+          onChange={(event) =>
+            setDraft((current) => ({
+              ...current,
+              completion: event.target.value,
+            }))
+          }
+        />
+      </label>
+      <div className="field-grid">
+        <label>
+          Reads, one per line
+          <textarea
+            rows={3}
+            value={draft.reads.join("\n")}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                reads: splitLines(event.target.value),
+              }))
+            }
+          />
+        </label>
+        <label>
+          Writes, one per line
+          <textarea
+            rows={3}
+            value={draft.writes.join("\n")}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                writes: splitLines(event.target.value),
+              }))
+            }
+          />
+        </label>
+      </div>
+
+      <div className="transition-editor">
+        <div className="editor-section-heading">
+          <div>
+            <strong>Next paths</strong>
+            <span>Where can work go after this step?</span>
+          </div>
+          <button className="text-button" onClick={addTransition} type="button">
+            + Add path
+          </button>
+        </div>
+        {draft.transitions.length === 0 && (
+          <p className="empty-paths">No next path. This step currently stops.</p>
+        )}
+        {draft.transitions.map((transition, index) => (
+          <div className="transition-edit-row" key={transition.id}>
+            <select
+              aria-label="Next state"
+              value={transition.to}
+              onChange={(event) =>
+                updateTransition(index, { to: event.target.value })
+              }
+            >
+              {states.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+            <input
+              aria-label="Transition condition"
+              value={transition.when}
+              onChange={(event) =>
+                updateTransition(index, { when: event.target.value })
+              }
+            />
+            <select
+              aria-label="Transition type"
+              value={transition.kind}
+              onChange={(event) =>
+                updateTransition(index, {
+                  kind: event.target.value as TransitionKind,
+                })
+              }
+            >
+              {Object.entries(TRANSITION_KIND_LABEL).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            <button
+              aria-label="Remove transition"
+              className="remove-button"
+              onClick={() =>
+                setDraft((current) => ({
+                  ...current,
+                  transitions: current.transitions.filter(
+                    (_, itemIndex) => itemIndex !== index,
+                  ),
+                }))
+              }
+              type="button"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div className="editor-actions">
+        <button className="button-secondary" onClick={onCancel} type="button">
+          Cancel
+        </button>
+        <button
+          className="button-primary"
+          disabled={
+            disabled ||
+            !draft.name.trim() ||
+            !draft.summary.trim() ||
+            !draft.instruction.trim() ||
+            !draft.completion.trim()
+          }
+          onClick={() => onSave(draft)}
+          type="button"
+        >
+          Save step
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export function LoopStudio({
+  initialLoop,
+  initialError = null,
+}: {
+  initialLoop: LoopDefinition | null;
+  initialError?: string | null;
+}) {
+  const [loop, setLoop] = useState<LoopDefinition | null>(initialLoop);
   const [health, setHealth] = useState<Health | null>(null);
   const [agent, setAgent] = useState<AgentName>("codex");
-  const [selection, setSelection] = useState<SelectedElement>({
-    type: "state",
-    id: initialLoop.startState,
-  });
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    newMessage(
-      "loopit",
-      "The current draft is parsed from .loopit/loop.md. Select any state or relation, then ask your local agent to explain, simplify, or repair it.",
-    ),
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isWorking, setIsWorking] = useState(false);
-  const [activity, setActivity] = useState("Ready to construct");
+  const [isSaving, setIsSaving] = useState(false);
+  const [activity, setActivity] = useState("Ready");
+  const [selectedStateId, setSelectedStateId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<"overview" | string | null>(null);
+  const [parseError, setParseError] = useState<string | null>(initialError);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const findings = useMemo(() => validateLoop(loop), [loop]);
-  const blockingCount = findings.filter(
-    (finding) => finding.severity === "error",
-  ).length;
-  const warningCount = findings.filter(
-    (finding) => finding.severity === "warning",
-  ).length;
-  const graph = useMemo(() => layoutStates(loop), [loop]);
-  const details = useMemo(
-    () => selectionDetails(loop, selection),
-    [loop, selection],
+  const sequence = useMemo(
+    () => (loop ? primarySequence(loop) : null),
+    [loop],
   );
+  const findings = useMemo(() => (loop ? validateLoop(loop) : []), [loop]);
+  const blockingFindings = findings.filter((item) => item.severity === "error");
 
   const refresh = useCallback(async () => {
     try {
@@ -258,8 +453,11 @@ export function LoopStudio({ initialLoop }: { initialLoop: LoopDefinition }) {
         }
       }
       if (loopResponse.ok) {
-        const payload = (await loopResponse.json()) as { loop: LoopDefinition };
+        const payload = (await loopResponse.json()) as {
+          loop: LoopDefinition | null;
+        };
         setLoop(payload.loop);
+        setParseError(null);
       }
     } catch {
       setActivity("Local bridge is offline");
@@ -274,35 +472,8 @@ export function LoopStudio({ initialLoop }: { initialLoop: LoopDefinition }) {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, activity]);
 
-  useEffect(() => {
-    const elementExists =
-      selection.type === "state"
-        ? loop.states.some((state) => state.id === selection.id)
-        : loop.states.some((state) =>
-            state.transitions.some(
-              (transition) => transition.id === selection.id,
-            ),
-          );
-    if (!elementExists) {
-      setSelection({ type: "state", id: loop.startState });
-    }
-  }, [loop, selection]);
-
-  const selectFinding = (finding: ValidationFinding) => {
-    if (finding.elementId) {
-      setSelection({ type: "state", id: finding.elementId });
-    }
-  };
-
-  const askAboutFinding = (finding: ValidationFinding) => {
-    selectFinding(finding);
-    setInput(
-      `Fix this validation finding with the smallest possible change: ${finding.title}. ${finding.detail}`,
-    );
-  };
-
-  const sendMessage = async () => {
-    const text = input.trim();
+  const sendMessage = async (textOverride?: string, displayText?: string) => {
+    const text = (textOverride ?? input).trim();
     if (!text || isWorking) return;
 
     const selectedAgent = health?.agents[agent];
@@ -314,7 +485,10 @@ export function LoopStudio({ initialLoop }: { initialLoop: LoopDefinition }) {
       return;
     }
 
-    setMessages((current) => [...current, newMessage("user", text)]);
+    setMessages((current) => [
+      ...current,
+      newMessage("user", displayText ?? text),
+    ]);
     setInput("");
     setIsWorking(true);
     setActivity(`Starting ${agent === "codex" ? "Codex" : "Claude"}`);
@@ -326,7 +500,7 @@ export function LoopStudio({ initialLoop }: { initialLoop: LoopDefinition }) {
         body: JSON.stringify({
           agent,
           message: text,
-          selectedElementId: selection.id,
+          selectedElementId: selectedStateId,
         }),
       });
 
@@ -359,7 +533,7 @@ export function LoopStudio({ initialLoop }: { initialLoop: LoopDefinition }) {
           if (event.type === "agent_message") {
             setMessages((current) => [
               ...current,
-              newMessage("agent", event.text),
+              newMessage("agent", event.text, agent),
             ]);
           }
           if (event.type === "error") {
@@ -367,12 +541,16 @@ export function LoopStudio({ initialLoop }: { initialLoop: LoopDefinition }) {
               ...current,
               newMessage("error", event.text),
             ]);
+            if (String(event.text).includes("Markdown could not be parsed")) {
+              setParseError(event.text);
+            }
           }
           if (event.type === "loop_updated") {
             setLoop(event.loop as LoopDefinition);
+            setParseError(null);
           }
           if (event.type === "done") {
-            setActivity(event.interrupted ? "Agent stopped" : "Draft updated");
+            setActivity(event.interrupted ? "Agent stopped" : "Ready");
           }
         }
       }
@@ -391,6 +569,110 @@ export function LoopStudio({ initialLoop }: { initialLoop: LoopDefinition }) {
     }
   };
 
+  const persistLoop = async (
+    nextLoop: LoopDefinition,
+    note: string,
+  ): Promise<LoopDefinition | null> => {
+    if (isSaving || isWorking) return null;
+    setIsSaving(true);
+    try {
+      const response = await fetch(`${DAEMON_URL}/api/loop`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ loop: nextLoop }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "The loop was not saved.");
+      const saved = payload.loop as LoopDefinition;
+      setLoop(saved);
+      setEditing(null);
+      setMessages((current) => [
+        ...current,
+        newMessage(
+          "loopit",
+          `${note} Saved to loop.md; the agent will read revision ${saved.revision} on the next turn.`,
+        ),
+      ]);
+      return saved;
+    } catch (error) {
+      setMessages((current) => [
+        ...current,
+        newMessage(
+          "error",
+          error instanceof Error ? error.message : "The visual edit failed.",
+        ),
+      ]);
+      return null;
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const saveState = async (state: LoopState) => {
+    if (!loop) return;
+    await persistLoop(
+      {
+        ...loop,
+        states: loop.states.map((item) => (item.id === state.id ? state : item)),
+      },
+      `Updated “${state.name}”.`,
+    );
+  };
+
+  const addStepBeforeRepeat = async () => {
+    if (!loop || !sequence) return;
+    const existing = new Set(loop.states.map((state) => state.id));
+    let index = loop.states.length + 1;
+    let id = `step-${index}`;
+    while (existing.has(id)) id = `step-${(index += 1)}`;
+
+    const newState: LoopState = {
+      id,
+      name: "New step",
+      kind: "act",
+      summary: "Describe what happens before the loop repeats.",
+      reads: [],
+      instruction: "Describe the bounded work performed in this step.",
+      writes: [],
+      completion: "Describe the evidence that makes this step complete.",
+      transitions: [],
+    };
+
+    let states = [...loop.states, newState];
+    if (sequence.loopBack) {
+      const { sourceId, targetId, transition } = sequence.loopBack;
+      states = states.map((state) =>
+        state.id === sourceId
+          ? {
+              ...state,
+              transitions: state.transitions.map((item) =>
+                item.id === transition.id
+                  ? { ...item, to: id, kind: "normal" }
+                  : item,
+              ),
+            }
+          : state,
+      );
+      newState.transitions = [
+        {
+          id: `${id}-to-${targetId}`,
+          to: targetId,
+          when: "This step is complete",
+          kind: transition.kind === "continue" ? "continue" : "normal",
+        },
+      ];
+    }
+
+    const saved = await persistLoop(
+      { ...loop, states },
+      "Added a new step before the loop repeats.",
+    );
+    if (saved) {
+      setSelectedStateId(id);
+      setEditing(id);
+    }
+  };
+
   const interrupt = async () => {
     await fetch(`${DAEMON_URL}/api/interrupt`, { method: "POST" }).catch(
       () => undefined,
@@ -398,61 +680,48 @@ export function LoopStudio({ initialLoop }: { initialLoop: LoopDefinition }) {
     setActivity("Stopping agent");
   };
 
-  const onComposerKeyDown = (
-    event: React.KeyboardEvent<HTMLTextAreaElement>,
-  ) => {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      void sendMessage();
-    }
-  };
+  const otherTransitions =
+    loop && sequence
+      ? loop.states.flatMap((state) =>
+          state.transitions
+            .filter((transition) => !sequence.chosenTransitionIds.has(transition.id))
+            .map((transition) => ({ state, transition })),
+        )
+      : [];
+  const sequenceIds = new Set(sequence?.states.map((state) => state.id) ?? []);
+  const otherStates = loop?.states.filter((state) => !sequenceIds.has(state.id)) ?? [];
 
   return (
     <main className="studio-shell">
       <header className="studio-header">
         <div className="brand-lockup">
-          <div className="brand-mark" aria-hidden="true">
-            <span />
-            <span />
-          </div>
+          <span className="brand-mark" aria-hidden="true">↺</span>
           <div>
             <strong>Loopit</strong>
-            <span>Construction studio</span>
+            <span>Construct a continuing loop</span>
           </div>
         </div>
-        <div className="project-context">
-          <span className={`bridge-dot ${health?.ok ? "is-online" : ""}`} />
-          <span>{health?.projectRoot ?? "Connecting to local project…"}</span>
-        </div>
-        <div className="draft-meta">
-          <span className="draft-pill">Draft v{loop.revision}</span>
-          <span className={blockingCount ? "health-bad" : "health-good"}>
-            {blockingCount
-              ? `${blockingCount} blocking`
-              : warningCount
-                ? `${warningCount} to review`
-                : "Structurally viable"}
-          </span>
+        <div className="connection-status">
+          <span className={health?.ok ? "status-dot is-online" : "status-dot"} />
+          {health?.ok ? "Local project connected" : "Connecting…"}
         </div>
       </header>
 
-      <section className="studio-grid">
+      <div className="studio-grid">
         <aside className="chat-panel" aria-label="Loop construction chat">
-          <div className="chat-heading">
+          <div className="panel-heading">
             <div>
-              <span className="eyebrow">Local supervisor</span>
-              <h1>Construct the loop with an agent</h1>
+              <span className="eyebrow">Conversation</span>
+              <h1>Build with your agent</h1>
             </div>
             <div className="agent-switcher" aria-label="Choose local agent">
               {(["codex", "claude"] as AgentName[]).map((name) => (
                 <button
-                  key={name}
                   className={agent === name ? "is-active" : ""}
                   disabled={health ? !health.agents[name].installed : false}
+                  key={name}
                   onClick={() => setAgent(name)}
-                  title={
-                    health?.agents[name].version ?? `${name} is not installed`
-                  }
+                  title={health?.agents[name].version ?? `${name} is not installed`}
                   type="button"
                 >
                   {name === "codex" ? "Codex" : "Claude"}
@@ -462,18 +731,24 @@ export function LoopStudio({ initialLoop }: { initialLoop: LoopDefinition }) {
           </div>
 
           <div className="chat-messages" aria-live="polite">
+            {messages.length === 0 && (
+              <div className="chat-empty">
+                <strong>Start with the work, not the workflow.</strong>
+                <p>
+                  Describe what you want to keep progressing, or use the button on
+                  the right. Your agent will ask one focused question at a time.
+                </p>
+              </div>
+            )}
             {messages.map((message) => (
-              <article
-                className={`chat-message chat-message--${message.role}`}
-                key={message.id}
-              >
-                <span className="chat-message__label">
+              <article className={`chat-message is-${message.role}`} key={message.id}>
+                <span>
                   {message.role === "user"
                     ? "You"
                     : message.role === "agent"
-                      ? agent === "codex"
-                        ? "Codex"
-                        : "Claude"
+                      ? message.source === "claude"
+                        ? "Claude"
+                        : "Codex"
                       : message.role === "error"
                         ? "Problem"
                         : "Loopit"}
@@ -490,259 +765,308 @@ export function LoopStudio({ initialLoop }: { initialLoop: LoopDefinition }) {
             <div ref={messagesEndRef} />
           </div>
 
-          <div className="prompt-suggestions" aria-label="Suggested prompts">
-            {["Find a dead end", "Simplify this loop", "Explain the loop-back"].map(
-              (suggestion) => (
-                <button
-                  key={suggestion}
-                  type="button"
-                  onClick={() => setInput(suggestion)}
-                >
-                  {suggestion}
-                </button>
-              ),
-            )}
-          </div>
-
           <div className="composer">
-            <div className="composer-context">
-              <span>Context</span>
-              <strong>
-                {details.state?.name ??
-                  (details.transition
-                    ? `${details.source?.name} → ${details.target?.name}`
-                    : "Whole loop")}
-              </strong>
-            </div>
+            {selectedStateId && loop && (
+              <div className="composer-context">
+                Discussing: {loop.states.find((state) => state.id === selectedStateId)?.name}
+                <button onClick={() => setSelectedStateId(null)} type="button">×</button>
+              </div>
+            )}
             <textarea
               aria-label="Message the loop construction agent"
               onChange={(event) => setInput(event.target.value)}
-              onKeyDown={onComposerKeyDown}
-              placeholder="Ask the agent to explain, repair, or change this loop…"
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void sendMessage();
+                }
+              }}
+              placeholder={
+                loop
+                  ? "Ask about the loop, or describe a change…"
+                  : "What work do you want to keep moving?"
+              }
               rows={3}
               value={input}
             />
-            <div className="composer-actions">
-              <span>Enter to send · Shift Enter for newline</span>
+            <div className="composer-footer">
+              <span>Enter to send · Shift-Enter for a new line</span>
               {isWorking ? (
-                <button className="stop-button" onClick={interrupt} type="button">
-                  Stop
+                <button className="button-stop" onClick={interrupt} type="button">
+                  Stop agent
                 </button>
               ) : (
                 <button
-                  className="send-button"
+                  className="button-primary"
                   disabled={!input.trim()}
                   onClick={() => void sendMessage()}
                   type="button"
                 >
                   Send
-                  <span aria-hidden="true">↗</span>
                 </button>
               )}
             </div>
           </div>
         </aside>
 
-        <section className="loop-panel" aria-label="Proposed loop visualization">
-          <div className="loop-heading">
-            <div>
-              <span className="eyebrow">Proposed loop</span>
-              <h2>{loop.name}</h2>
-              <p>{loop.objective}</p>
-            </div>
-            <div className="legend" aria-label="Transition legend">
-              <span><i className="legend-line legend-line--normal" />Move</span>
-              <span><i className="legend-line legend-line--continue" />Continue</span>
-              <span><i className="legend-line legend-line--interrupt" />Interrupt</span>
-            </div>
-          </div>
-
-          <div className="loop-canvas" data-testid="loop-canvas">
-            <ReactFlow
-              edges={graph.edges}
-              fitView
-              fitViewOptions={{ padding: 0.18 }}
-              maxZoom={1.45}
-              minZoom={0.34}
-              nodes={graph.nodes}
-              nodesConnectable={false}
-              nodesDraggable={false}
-              onEdgeClick={(_, edge) =>
-                setSelection({ type: "transition", id: edge.id })
-              }
-              onNodeClick={(_, node) =>
-                setSelection({ type: "state", id: node.id })
-              }
-              panOnScroll
-              proOptions={{ hideAttribution: false }}
-            >
-              <Background color="#d9d8d1" gap={22} size={1} />
-              <Controls showInteractive={false} />
-            </ReactFlow>
-          </div>
-
-          <div className="inspection-grid">
-            <section className="contract-panel" aria-label="Selected contract">
-              {details.state && (
-                <StateContract
-                  state={details.state}
-                  onSelectTransition={(id) =>
-                    setSelection({ type: "transition", id })
-                  }
-                />
-              )}
-              {details.transition && details.source && details.target && (
-                <TransitionContract
-                  source={details.source}
-                  target={details.target}
-                  transition={details.transition}
-                />
-              )}
-            </section>
-
-            <section className="validation-panel" aria-label="Loop validation">
-              <div className="section-title-row">
-                <div>
-                  <span className="eyebrow">Deterministic checks</span>
-                  <h3>Loop validation</h3>
-                </div>
-                <span className="validation-count">
-                  {findings.filter((finding) => finding.severity === "pass").length}/
-                  {findings.length} passed
-                </span>
+        <section className="loop-panel" aria-label="Loop editor">
+          {!loop && !parseError && (
+            <div className="empty-loop">
+              <div className="empty-loop-mark" aria-hidden="true">
+                <span>1</span><i>→</i><span>2</span><i>↺</i>
               </div>
-              <div className="finding-list">
-                {findings.map((finding) => (
-                  <div
-                    className={`finding finding--${finding.severity}`}
-                    key={finding.id}
+              <span className="eyebrow">Your loop</span>
+              <h2>No loop yet</h2>
+              <p>
+                First, tell the agent what you want to keep progressing. It will
+                ask questions and propose the smallest loop that can continue.
+              </p>
+              <button
+                className="button-primary button-large"
+                disabled={isWorking}
+                onClick={() =>
+                  void sendMessage(START_CONSTRUCTION, "Construct my first loop")
+                }
+                type="button"
+              >
+                Construct my first loop
+              </button>
+              <small>Nothing is created until the objective is clear.</small>
+            </div>
+          )}
+
+          {!loop && parseError && (
+            <div className="empty-loop error-state">
+              <span className="eyebrow">loop.md needs repair</span>
+              <h2>The current loop cannot be read</h2>
+              <p>{parseError}</p>
+              <button
+                className="button-primary"
+                onClick={() =>
+                  void sendMessage(
+                    "Repair the existing loop.md so it follows the required Markdown contract. Preserve the user's intent and make the smallest possible correction.",
+                    "Ask the agent to repair loop.md",
+                  )
+                }
+                type="button"
+              >
+                Ask agent to repair it
+              </button>
+            </div>
+          )}
+
+          {loop && sequence && (
+            <div className="loop-content">
+              <div className="loop-overview">
+                <div className="loop-overview-heading">
+                  <div>
+                    <span className="eyebrow">Your loop · revision {loop.revision}</span>
+                    <h2>{loop.name}</h2>
+                  </div>
+                  <button
+                    className="button-secondary"
+                    onClick={() => setEditing("overview")}
+                    type="button"
                   >
+                    Edit objective
+                  </button>
+                </div>
+                {editing === "overview" ? (
+                  <OverviewEditor
+                    disabled={isSaving}
+                    loop={loop}
+                    onCancel={() => setEditing(null)}
+                    onSave={(next) => void persistLoop(next, "Updated the loop objective.")}
+                  />
+                ) : (
+                  <p className="objective-copy">{loop.objective}</p>
+                )}
+                <div className={`simple-health ${blockingFindings.length ? "has-errors" : "is-good"}`}>
+                  <strong>
+                    {blockingFindings.length
+                      ? `${blockingFindings.length} structural ${blockingFindings.length === 1 ? "issue" : "issues"}`
+                      : "The loop can repeat"}
+                  </strong>
+                  <span>
+                    {blockingFindings.length
+                      ? "Open checks below or ask the agent to repair them."
+                      : "A path returns to earlier work after state is updated."}
+                  </span>
+                </div>
+              </div>
+
+              <section className="sequence-section">
+                <div className="section-heading">
+                  <div>
+                    <span className="eyebrow">The continuing path</span>
+                    <h3>What happens, one step at a time</h3>
+                  </div>
+                  <span>{sequence.states.length} steps</span>
+                </div>
+
+                <ol className="step-sequence">
+                  {sequence.states.map((state, index) => {
+                    const link = sequence.links.find((item) => item.sourceId === state.id);
+                    const isCycleStart = sequence.loopBack?.targetId === state.id;
+                    return (
+                      <li key={state.id}>
+                        <article className={`step-card ${isCycleStart ? "is-cycle-start" : ""}`}>
+                          {editing === state.id ? (
+                            <StateEditor
+                              disabled={isSaving}
+                              onCancel={() => setEditing(null)}
+                              onSave={(next) => void saveState(next)}
+                              state={state}
+                              states={loop.states}
+                            />
+                          ) : (
+                            <>
+                              <div className="step-number">{index + 1}</div>
+                              <div className="step-copy">
+                                <div className="step-meta">
+                                  <span>{STATE_KIND_LABEL[state.kind]}</span>
+                                  {isCycleStart && <strong>Loop begins here</strong>}
+                                </div>
+                                <h4>{state.name}</h4>
+                                <p>{state.summary}</p>
+                                <div className="done-when">
+                                  <span>Done when</span>
+                                  {state.completion}
+                                </div>
+                              </div>
+                              <button
+                                className="edit-step-button"
+                                onClick={() => {
+                                  setSelectedStateId(state.id);
+                                  setEditing(state.id);
+                                }}
+                                type="button"
+                              >
+                                Edit
+                              </button>
+                            </>
+                          )}
+                        </article>
+                        {link && (
+                          <div className="step-connector">
+                            <span aria-hidden="true">↓</span>
+                            <p>{link.transition.when}</p>
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ol>
+
+                {sequence.loopBack ? (
+                  <div className="loop-back">
+                    <span aria-hidden="true">↺</span>
+                    <div>
+                      <strong>
+                        Then return to step {sequence.loopBack.targetIndex + 1}: {loop.states.find((state) => state.id === sequence.loopBack?.targetId)?.name}
+                      </strong>
+                      <p>{sequence.loopBack.transition.when}</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="missing-loop-back">
+                    <strong>This path does not loop back yet.</strong>
                     <button
-                      className="finding-summary"
-                      onClick={() => selectFinding(finding)}
+                      className="text-button"
+                      onClick={() =>
+                        void sendMessage(
+                          "The visual editor shows no continuation path back into the loop. Propose the smallest valid loop-back transition.",
+                          "Help me close the loop",
+                        )
+                      }
                       type="button"
                     >
-                      <FindingIcon severity={finding.severity} />
-                      <span>
-                        <strong>{finding.title}</strong>
-                        <small>{finding.detail}</small>
-                      </span>
+                      Ask agent to close it
                     </button>
-                    {finding.severity !== "pass" && (
+                  </div>
+                )}
+
+                {sequence.loopBack && (
+                  <button
+                    className="add-step-button"
+                    disabled={isSaving || isWorking}
+                    onClick={() => void addStepBeforeRepeat()}
+                    type="button"
+                  >
+                    + Add a step before the loop repeats
+                  </button>
+                )}
+              </section>
+
+              {(otherTransitions.length > 0 || otherStates.length > 0) && (
+                <details className="secondary-paths">
+                  <summary>
+                    Stops, alternate paths, and other steps
+                    <span>{otherTransitions.length + otherStates.length}</span>
+                  </summary>
+                  <div className="secondary-list">
+                    {otherTransitions.map(({ state, transition }) => (
                       <button
-                        className="finding-action"
-                        onClick={() => askAboutFinding(finding)}
+                        key={transition.id}
+                        onClick={() => {
+                          setSelectedStateId(state.id);
+                          setEditing(state.id);
+                        }}
                         type="button"
                       >
-                        Ask agent
+                        <span>{TRANSITION_KIND_LABEL[transition.kind]}</span>
+                        <strong>{state.name}</strong>
+                        <p>{transition.when}</p>
                       </button>
-                    )}
+                    ))}
+                    {otherStates.map((state) => (
+                      <button
+                        key={state.id}
+                        onClick={() => {
+                          setSelectedStateId(state.id);
+                          setEditing(state.id);
+                        }}
+                        type="button"
+                      >
+                        <span>Other step</span>
+                        <strong>{state.name}</strong>
+                        <p>{state.summary}</p>
+                      </button>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </section>
-          </div>
+                </details>
+              )}
+
+              {findings.length > 0 && (
+                <details className="validation-details">
+                  <summary>Structural checks <span>{findings.length}</span></summary>
+                  <div>
+                    {findings.map((finding) => (
+                      <button
+                        className={`validation-row is-${finding.severity}`}
+                        key={finding.id}
+                        onClick={() => {
+                          if (finding.elementId) {
+                            setSelectedStateId(finding.elementId);
+                            setEditing(finding.elementId);
+                          }
+                        }}
+                        type="button"
+                      >
+                        <span>{finding.severity === "pass" ? "✓" : "!"}</span>
+                        <div>
+                          <strong>{finding.title}</strong>
+                          <p>{finding.detail}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </div>
+          )}
         </section>
-      </section>
+      </div>
     </main>
-  );
-}
-
-function StateContract({
-  state,
-  onSelectTransition,
-}: {
-  state: LoopState;
-  onSelectTransition: (id: string) => void;
-}) {
-  return (
-    <>
-      <div className="section-title-row">
-        <div>
-          <span className="eyebrow">Selected state · {KIND_LABEL[state.kind]}</span>
-          <h3>{state.name}</h3>
-        </div>
-        <span className={`state-kind state-kind--${state.kind}`}>
-          {KIND_LABEL[state.kind]}
-        </span>
-      </div>
-      <p className="contract-instruction">{state.instruction}</p>
-      <div className="contract-columns">
-        <ContractList label="Reads" items={state.reads} />
-        <ContractList label="Writes" items={state.writes} />
-      </div>
-      <div className="completion-card">
-        <span>Completion evidence</span>
-        <p>{state.completion}</p>
-      </div>
-      {state.transitions.length > 0 && (
-        <div className="transition-list">
-          <span>Next relations</span>
-          {state.transitions.map((transition) => (
-            <button
-              key={transition.id}
-              onClick={() => onSelectTransition(transition.id)}
-              type="button"
-            >
-              <i className={`transition-dot transition-dot--${transition.kind}`} />
-              <span>{transition.when}</span>
-              <strong aria-hidden="true">→</strong>
-            </button>
-          ))}
-        </div>
-      )}
-    </>
-  );
-}
-
-function TransitionContract({
-  source,
-  target,
-  transition,
-}: {
-  source: LoopState;
-  target: LoopState;
-  transition: LoopTransition;
-}) {
-  return (
-    <>
-      <div className="section-title-row">
-        <div>
-          <span className="eyebrow">Selected relation</span>
-          <h3>{source.name} → {target.name}</h3>
-        </div>
-        <span className={`relation-kind relation-kind--${transition.kind}`}>
-          {transition.kind}
-        </span>
-      </div>
-      <div className="relation-route">
-        <span>{source.name}</span>
-        <i aria-hidden="true">→</i>
-        <span>{target.name}</span>
-      </div>
-      <div className="completion-card">
-        <span>Transition condition</span>
-        <p>{transition.when}</p>
-      </div>
-      <p className="relation-help">
-        Ask the agent what evidence proves this condition, or whether this path
-        can stop the loop prematurely.
-      </p>
-    </>
-  );
-}
-
-function ContractList({ label, items }: { label: string; items: string[] }) {
-  return (
-    <div className="contract-list">
-      <span>{label}</span>
-      <div>
-        {items.length ? (
-          items.map((item) => <em key={item}>{item}</em>)
-        ) : (
-          <em className="is-empty">Nothing declared</em>
-        )}
-      </div>
-    </div>
   );
 }
