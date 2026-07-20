@@ -2489,7 +2489,7 @@ p {
   font-size: 17px;
 }
 
-.runtime-launch > header > span {
+.runtime-header-state > span {
   padding: 5px 8px;
   border-radius: 6px;
   background: var(--soft);
@@ -2502,10 +2502,43 @@ p {
   border-color: #a8c8b4;
 }
 
-.runtime-launch.is-ready > header > span,
-.runtime-launch.is-running > header > span {
+.runtime-launch.is-ready .runtime-header-state > span,
+.runtime-launch.is-running .runtime-header-state > span {
   background: var(--green-soft);
   color: #285d42;
+}
+
+.runtime-header-state {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.runtime-clock {
+  min-width: 105px;
+  text-align: right;
+}
+
+.runtime-clock small,
+.runtime-clock time {
+  display: block;
+}
+
+.runtime-clock small {
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.runtime-clock time {
+  color: var(--ink);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
 }
 
 .runtime-launch.is-locked {
@@ -2865,6 +2898,20 @@ p {
     align-items: stretch;
     flex-direction: column;
     gap: 12px;
+  }
+
+  .runtime-launch > header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .runtime-header-state {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .runtime-clock {
+    text-align: left;
   }
 
   .runtime-launch-body button {

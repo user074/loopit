@@ -1081,6 +1081,7 @@ async function streamRuntime(request, response) {
       id: run.id,
       loopRevision: run.loopRevision,
       agent: run.agent,
+      active: true,
       status: run.status,
       startedAt: run.startedAt,
       finishedAt: null,
@@ -1189,6 +1190,7 @@ async function streamRuntime(request, response) {
       id: run.id,
       loopRevision: run.loopRevision,
       agent: run.agent,
+      active: false,
       status: run.status,
       startedAt: run.startedAt,
       finishedAt: run.finishedAt,
@@ -1289,7 +1291,23 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/api/run") {
-      json(response, 200, { run: await readLatestRunOrNull() });
+      const run = await readLatestRunOrNull();
+      const active = Boolean(
+        run &&
+          activeRun?.purpose === "runtime" &&
+          activeRun.runId === run.id,
+      );
+      json(response, 200, {
+        run: run
+          ? {
+              ...run,
+              active,
+              status: run.status === "running" && !active
+                ? "interrupted"
+                : run.status,
+            }
+          : null,
+      });
       return;
     }
 

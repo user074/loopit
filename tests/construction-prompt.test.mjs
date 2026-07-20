@@ -95,4 +95,6 @@ test("runtime is gated by the current passed revision and uses a separate worker
   assert.match(daemon, /Begin from the declared first work and start state/);
   assert.match(daemon, /url\.pathname === "\/api\/run"/);
   assert.match(daemon, /mkdir\(runsDir/);
+  assert.match(daemon, /activeRun\?\.purpose === "runtime"/);
+  assert.match(daemon, /status: run\.status === "running" && !active/);
 });

@@ -81,6 +81,7 @@ interface RuntimeRun {
   id: string;
   loopRevision: number | null;
   agent: AgentName;
+  active: boolean;
   status: "running" | "paused" | "failed" | "interrupted";
   startedAt: string | null;
   finishedAt: string | null;
@@ -332,6 +333,18 @@ function conversationTime(conversation: ConversationSummary) {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(conversation.updatedAt));
+}
+
+function formatRuntimeDuration(milliseconds: number) {
+  const totalSeconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const days = Math.floor(totalSeconds / 86_400);
+  const hours = Math.floor((totalSeconds % 86_400) / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  const clock = [hours, minutes, seconds]
+    .map((value) => String(value).padStart(2, "0"))
+    .join(":");
+  return days ? `${days}d ${clock}` : clock;
 }
 
 function OverviewEditor({
@@ -1330,6 +1343,7 @@ export function LoopStudio({
   const [runtimeRun, setRuntimeRun] = useState<RuntimeRun | null>(null);
   const [runtimeActivity, setRuntimeActivity] = useState("Ready to start");
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [runtimeClock, setRuntimeClock] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wiringTestRunRef = useRef(0);
   const unifiedTestRunRef = useRef(0);
@@ -1341,7 +1355,7 @@ export function LoopStudio({
   const findings = useMemo(() => (loop ? validateLoop(loop) : []), [loop]);
   const blockingFindings = findings.filter((item) => item.severity === "error");
   const isUnifiedTestRunning = ACTIVE_TEST_STAGES.includes(unifiedTestStage);
-  const isRuntimeRunning = runtimeRun?.status === "running";
+  const isRuntimeRunning = runtimeRun?.active === true;
   const conversationList = conversations ?? [];
   const activeConversation = conversationList.find(
     (conversation) => conversation.id === activeConversationId,
@@ -1416,6 +1430,13 @@ export function LoopStudio({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!isRuntimeRunning) return;
+    setRuntimeClock(Date.now());
+    const timer = window.setInterval(() => setRuntimeClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [isRuntimeRunning, runtimeRun?.id]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1822,6 +1843,20 @@ export function LoopStudio({
       : null;
   const testPassed =
     currentAgentTest?.verdict === "pass" && currentStructurePasses;
+  const runtimeStartedAt = runtimeRun?.startedAt
+    ? Date.parse(runtimeRun.startedAt)
+    : 0;
+  const runtimeFinishedAt = runtimeRun?.finishedAt
+    ? Date.parse(runtimeRun.finishedAt)
+    : runtimeStartedAt;
+  const runtimeElapsed = runtimeRun
+    ? Math.max(
+        0,
+        (isRuntimeRunning
+          ? runtimeClock || runtimeStartedAt
+          : runtimeFinishedAt) - runtimeStartedAt,
+      )
+    : 0;
   const testPanelLabel = isUnifiedTestRunning
     ? TEST_STAGE_LABEL[unifiedTestStage]
     : testPassed
@@ -3091,9 +3126,23 @@ export function LoopStudio({
                     <span className="eyebrow">Runtime</span>
                     <h3>Start the loop</h3>
                   </div>
-                  <span>
-                    {isRuntimeRunning ? "Running" : testPassed ? "Ready" : "Locked"}
-                  </span>
+                  <div className="runtime-header-state">
+                    <div className="runtime-clock">
+                      <small>
+                        {runtimeRun && !isRuntimeRunning
+                          ? "Last continuous run"
+                          : "Continuous runtime"}
+                      </small>
+                      <time
+                        dateTime={`PT${Math.floor(runtimeElapsed / 1000)}S`}
+                      >
+                        {formatRuntimeDuration(runtimeElapsed)}
+                      </time>
+                    </div>
+                    <span>
+                      {isRuntimeRunning ? "Running" : testPassed ? "Ready" : "Locked"}
+                    </span>
+                  </div>
                 </header>
                 <div className="runtime-launch-body">
                   <div>

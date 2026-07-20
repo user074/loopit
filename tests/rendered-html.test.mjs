@@ -108,6 +108,10 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.match(studio, /Loop test passed/);
   assert.match(studio, /Continue test/);
   assert.match(studio, /runtime-launch/);
+  assert.match(studio, /Continuous runtime/);
+  assert.match(studio, /formatRuntimeDuration/);
+  assert.match(studio, /window\.setInterval\(\(\) => setRuntimeClock\(Date\.now\(\)\), 1000\)/);
+  assert.match(studio, /Last continuous run/);
   assert.match(studio, /Pass Test this loop for revision/);
   assert.match(studio, /fetch\(`\$\{DAEMON_URL\}\/api\/run`/);
   assert.match(studio, /Start loop/);
