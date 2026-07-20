@@ -71,11 +71,18 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.match(studio, /FLOW_ZOOM_LABEL/);
   assert.match(studio, /FLOW_ZOOM_DESCRIPTION/);
   assert.match(studio, /How the work continues/);
-  assert.match(studio, /StartingPackagePanel/);
-  assert.match(studio, /Before the cycle/);
-  assert.match(studio, /Starting point/);
-  assert.match(studio, /Start the cycle with/);
+  assert.match(studio, /StartingWorkPanel/);
+  assert.match(studio, /What matters first/);
+  assert.match(studio, /Starting work/);
+  assert.match(studio, /Begin the cycle/);
   assert.match(studio, /StartingPackageEditor/);
+  assert.match(studio, /StartingWorkTable/);
+  assert.match(studio, /work-item-table/);
+  assert.match(studio, /first-task-spotlight/);
+  assert.match(studio, /SetupPanel/);
+  assert.match(studio, /Specified separately/);
+  assert.match(studio, /setup-disclosure/);
+  assert.match(studio, /setup-table/);
   assert.match(studio, /Ask agent to propose it/);
   assert.match(studio, /What is already known/);
   assert.match(studio, /What remains to pursue/);
@@ -90,6 +97,10 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.match(studio, /Back to step/);
   assert.match(
     studio,
+    /<StartingWorkPanel[\s\S]*<StateFlowCanvas[\s\S]*<SetupPanel/,
+  );
+  assert.match(
+    studio,
     /zoom > 0[\s\S]*handoffSummary\(handoff\)[\s\S]*zoom === 2[\s\S]*usualTransition\.when/,
   );
   assert.doesNotMatch(studio, /handoffRole/);
@@ -99,6 +110,6 @@ test("the product no longer depends on the disposable starter", async () => {
   );
   assert.match(
     studio,
-    /zoom > 0[\s\S]*item\.description[\s\S]*zoom === 2[\s\S]*item\.initialContents/,
+    /compactContent\(content, index\)[\s\S]*defaultOpen|compactContent\(content, index\)[\s\S]*open=\{zoom/,
   );
 });

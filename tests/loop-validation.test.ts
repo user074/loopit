@@ -120,6 +120,24 @@ test("validation warns when engine language leaks into visible names", () => {
   );
 });
 
+test("validation warns when setup defers agent-owned choices", () => {
+  const placeholder = structuredClone(loop);
+  const setup = placeholder.startingPackage.find(
+    (item) => item.role === "foundation",
+  );
+  assert.ok(setup);
+  setup.initialContents = ["Set up the environment", "Choose model later"];
+
+  assert.ok(
+    validateLoop(placeholder).some(
+      (finding) =>
+        finding.id === "setup-placeholder-language" &&
+        finding.severity === "warning" &&
+        finding.elementId === setup.id,
+    ),
+  );
+});
+
 test("validation identifies a nonterminal dead end", () => {
   const broken = structuredClone(loop);
   const revision = broken.states.find((state) => state.id === "update-state");

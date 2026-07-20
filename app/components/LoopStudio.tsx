@@ -17,11 +17,11 @@ import { validateLoop } from "@/lib/loop-validation";
 
 const DAEMON_URL = "http://127.0.0.1:4318";
 const START_CONSTRUCTION =
-  "Begin first-time loop construction. No loop exists yet. Ask me one focused question about what work I want to keep progressing. Then propose a domain-specific Starting Package—evidence-backed state, initial objective frontier, working foundation, and first executable work item—before proposing any recurring states.";
+  "Begin first-time loop construction. No loop exists yet. Ask me one focused question about what work I want to keep progressing. Once the objective is clear, complete the proposal in this turn: list the specific hypotheses, features, design questions, opportunities, cases, or equivalent that I will actually track; choose one exact first task; propose the recognizable recurring work cycle; and specify the separate setup needed to begin. Inspect what exists, choose safe reversible defaults, and do not make me ask again for initial work, methods, models, tools, baselines, or tests.";
 const RESOLVE_TEST_FAILURE = `The latest .loopit/test-report.md found unresolved preflight issues. Treat this result as the next construction action, never as a reason to stop.
 
 Read both .loopit/loop.md and .loopit/test-report.md. Classify every issue by ownership:
-- Agent-owned: missing or generic Starting Package, missing domain handoff, unclear native deliverable, incomplete Result package, inconsistent artifact ownership, or state integration logic that an agent can define safely. Resolve these now by making the smallest coherent update to loop.md.
+- Agent-owned: missing, broad, or generic starting work; placeholder setup; missing domain handoff; unclear native deliverable; incomplete Result package; inconsistent artifact ownership; or state integration logic that an agent can define safely. Resolve these now by making the smallest coherent update to loop.md.
 - Human-owned: product intent, acceptance threshold, permission, credential, sensitive fact, risk choice, or policy that the agent must not invent. After resolving agent-owned issues, ask exactly one focused question for the highest-leverage missing human input.
 - Runtime evidence: behavior that only a later sandbox execution can prove. Define how the Result package will carry the observed evidence; do not claim it already passed.
 
@@ -134,6 +134,12 @@ const STARTING_PACKAGE_ORDER: StartingPackageRole[] = [
   "first-work",
 ];
 
+const STARTING_WORK_ROLES: StartingPackageRole[] = [
+  "state",
+  "frontier",
+  "first-work",
+];
+
 const STARTING_PACKAGE_EDIT_PROMPT: Record<StartingPackageRole, string> = {
   state: "What is already known",
   frontier: "What remains to pursue",
@@ -159,6 +165,58 @@ function splitLines(value: string) {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+function mergeStartingPackage(
+  current: StartingPackageItem[],
+  changed: StartingPackageItem[],
+) {
+  return STARTING_PACKAGE_ORDER.map(
+    (role) =>
+      changed.find((item) => item.role === role) ??
+      current.find((item) => item.role === role),
+  ).filter(Boolean) as StartingPackageItem[];
+}
+
+function compactContent(content: string, index: number) {
+  const value = content.trim();
+  let label = value;
+  let detail = "";
+
+  const quotedLabel = value.match(/^`([^`]+)`\s*(?:—|:|-)?\s*(.*)$/);
+  const leadingCode = value.match(
+    /^(?:use|run|build with|start with)\s+`([^`]+)`\s*(.*)$/i,
+  );
+  const divided = value.match(/^(.+?)(?:\s+—\s+|:\s+)(.+)$/);
+
+  if (quotedLabel) {
+    label = quotedLabel[1];
+    detail = quotedLabel[2];
+  } else if (leadingCode) {
+    label = leadingCode[1];
+    detail = value;
+  } else if (divided) {
+    label = divided[1];
+    detail = divided[2];
+  } else if (value.length > 74) {
+    const sentenceEnd = value.search(/[.;]/);
+    if (sentenceEnd > 18 && sentenceEnd < 74) {
+      label = value.slice(0, sentenceEnd);
+      detail = value;
+    } else {
+      label = `${value.slice(0, 71).trimEnd()}…`;
+      detail = value;
+    }
+  }
+
+  detail = detail.replace(/^[—:\-]\s*/, "").trim();
+  const hypothesis = label.match(/^(H\d+)\s*(?:—|-)?\s*(.*)$/i);
+
+  return {
+    marker: hypothesis?.[1] ?? String(index + 1).padStart(2, "0"),
+    label: hypothesis?.[2] || label,
+    detail: detail === label ? "" : detail,
+  };
 }
 
 function handoffSummary(items: string[]) {
@@ -254,11 +312,15 @@ function OverviewEditor({
 
 function StartingPackageEditor({
   items,
+  roles,
+  saveLabel,
   disabled,
   onCancel,
   onSave,
 }: {
   items: StartingPackageItem[];
+  roles: StartingPackageRole[];
+  saveLabel: string;
   disabled: boolean;
   onCancel: () => void;
   onSave: (items: StartingPackageItem[]) => void;
@@ -276,11 +338,11 @@ function StartingPackageEditor({
     );
   };
 
-  const ordered = STARTING_PACKAGE_ORDER.map((role) =>
+  const ordered = roles.map((role) =>
     draft.find((item) => item.role === role),
   ).filter(Boolean) as StartingPackageItem[];
   const canSave =
-    ordered.length === STARTING_PACKAGE_ORDER.length &&
+    ordered.length === roles.length &&
     ordered.every(
       (item) =>
         item.name.trim() &&
@@ -336,14 +398,65 @@ function StartingPackageEditor({
           onClick={() => onSave(ordered)}
           type="button"
         >
-          Save starting point
+          {saveLabel}
         </button>
       </div>
     </div>
   );
 }
 
-function StartingPackagePanel({
+function StartingWorkTable({
+  item,
+  label,
+  zoom,
+}: {
+  item: StartingPackageItem;
+  label: string;
+  zoom: FlowZoom;
+}) {
+  return (
+    <section className="work-table-group">
+      <div className="work-table-heading">
+        <div>
+          <span>{label}</span>
+          <strong>{item.name}</strong>
+        </div>
+        <em>{item.initialContents.length}</em>
+      </div>
+      {zoom > 0 && <p className="work-table-description">{item.description}</p>}
+      <table className="work-item-table">
+        <tbody>
+          {item.initialContents.map((content, index) => {
+            const compact = compactContent(content, index);
+            return (
+              <tr key={content}>
+                <td>{compact.marker}</td>
+                <td>
+                  {compact.detail ? (
+                    <details
+                      open={zoom === 2 ? true : undefined}
+                      key={`${zoom}-${content}`}
+                    >
+                      <summary>
+                        <span>{compact.label}</span>
+                        <i aria-hidden="true">›</i>
+                      </summary>
+                      <p>{compact.detail}</p>
+                    </details>
+                  ) : (
+                    <span className="work-item-label">{compact.label}</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+function StartingWorkPanel({
   items,
   zoom,
   disabled,
@@ -363,19 +476,20 @@ function StartingPackagePanel({
   onSave: (items: StartingPackageItem[]) => void;
 }) {
   const safeItems = items ?? [];
-  const ordered = STARTING_PACKAGE_ORDER.map((role) =>
+  const ordered = STARTING_WORK_ROLES.map((role) =>
     safeItems.find((item) => item.role === role),
   ).filter(Boolean) as StartingPackageItem[];
-  const isComplete = ordered.length === STARTING_PACKAGE_ORDER.length;
+  const isComplete = ordered.length === STARTING_WORK_ROLES.length;
+  const currentState = ordered.find((item) => item.role === "state");
+  const frontier = ordered.find((item) => item.role === "frontier");
   const firstWork = ordered.find((item) => item.role === "first-work");
 
   return (
     <section className={`starting-package starting-package-level-${zoom}`}>
       <div className="starting-package-heading">
         <div>
-          <span className="eyebrow">Before the cycle</span>
-          <h3>Starting point</h3>
-          <p>The initial materials and first task proposed for this project.</p>
+          <span className="eyebrow">What matters first</span>
+          <h3>Starting work</h3>
         </div>
         {!editing && (
           <button
@@ -384,7 +498,7 @@ function StartingPackagePanel({
             onClick={isComplete ? onEdit : onPropose}
             type="button"
           >
-            {isComplete ? "Edit starting point" : "Ask agent to propose it"}
+            {isComplete ? "Edit starting work" : "Ask agent to propose it"}
           </button>
         )}
       </div>
@@ -395,36 +509,142 @@ function StartingPackagePanel({
           items={safeItems}
           onCancel={onCancel}
           onSave={onSave}
+          roles={STARTING_WORK_ROLES}
+          saveLabel="Save starting work"
         />
       ) : isComplete ? (
         <>
-          <div className="starting-package-grid">
-            {ordered.map((item) => (
-              <article
-                aria-label={STARTING_PACKAGE_EDIT_PROMPT[item.role]}
-                className={item.role === "first-work" ? "is-first-work" : ""}
-                key={item.role}
-              >
-                <strong>{item.name}</strong>
-                {zoom > 0 && <p>{item.description}</p>}
-                {zoom === 2 && (
-                  <ul>
-                    {item.initialContents.map((content) => (
-                      <li key={content}>{content}</li>
-                    ))}
-                  </ul>
-                )}
-              </article>
-            ))}
+          <div className="starting-work-tables">
+            {currentState && (
+              <StartingWorkTable item={currentState} label="Current" zoom={zoom} />
+            )}
+            {frontier && (
+              <StartingWorkTable item={frontier} label="Next" zoom={zoom} />
+            )}
           </div>
+          {firstWork && (
+            <section className="first-task-spotlight">
+              <div>
+                <span>Start here</span>
+                <strong>{firstWork.name}</strong>
+                {zoom > 0 && <p>{firstWork.description}</p>}
+              </div>
+              <details open={zoom === 2 ? true : undefined} key={`first-task-${zoom}`}>
+                <summary>{firstWork.initialContents.length} task steps</summary>
+                <ol>
+                  {firstWork.initialContents.map((content) => (
+                    <li key={content}>{content}</li>
+                  ))}
+                </ol>
+              </details>
+            </section>
+          )}
           <div className="starting-package-to-loop">
             <span aria-hidden="true">↓</span>
-            <strong>Start the cycle with {firstWork?.name}</strong>
+            <strong>Begin the cycle</strong>
           </div>
         </>
       ) : (
         <div className="starting-package-missing">
-          The agent has not proposed a complete starting point yet.
+          The agent has not proposed concrete starting work yet.
+        </div>
+      )}
+    </section>
+  );
+}
+
+function SetupPanel({
+  items,
+  zoom,
+  disabled,
+  editing,
+  onEdit,
+  onPropose,
+  onCancel,
+  onSave,
+}: {
+  items: StartingPackageItem[];
+  zoom: FlowZoom;
+  disabled: boolean;
+  editing: boolean;
+  onEdit: () => void;
+  onPropose: () => void;
+  onCancel: () => void;
+  onSave: (items: StartingPackageItem[]) => void;
+}) {
+  const safeItems = items ?? [];
+  const setup = safeItems.find((item) => item.role === "foundation");
+
+  return (
+    <section className="setup-panel">
+      <div className="setup-panel-heading">
+        <div>
+          <span className="eyebrow">Specified separately</span>
+          <h3>Setup</h3>
+        </div>
+        {!editing && (
+          <button
+            className="button-secondary"
+            disabled={disabled}
+            onClick={setup ? onEdit : onPropose}
+            type="button"
+          >
+            {setup ? "Edit setup" : "Ask agent to specify it"}
+          </button>
+        )}
+      </div>
+
+      {editing ? (
+        <StartingPackageEditor
+          disabled={disabled}
+          items={safeItems}
+          onCancel={onCancel}
+          onSave={onSave}
+          roles={["foundation"]}
+          saveLabel="Save setup"
+        />
+      ) : setup ? (
+        <details
+          className="setup-disclosure"
+          open={zoom > 0 ? true : undefined}
+          key={`setup-${zoom}`}
+        >
+          <summary>
+            <span>
+              <strong>{setup.name}</strong>
+              <small>{setup.initialContents.length} choices ready</small>
+            </span>
+            <em>View</em>
+          </summary>
+          {zoom === 2 && <p>{setup.description}</p>}
+          <table className="setup-table">
+            <tbody>
+              {setup.initialContents.map((content, index) => {
+                const compact = compactContent(content, index);
+                return (
+                  <tr key={content}>
+                    <td>{compact.marker}</td>
+                    <td>
+                      <details
+                        open={zoom === 2 ? true : undefined}
+                        key={`${zoom}-${content}`}
+                      >
+                        <summary>
+                          <span>{compact.label}</span>
+                          <i aria-hidden="true">›</i>
+                        </summary>
+                        <p>{compact.detail || content}</p>
+                      </details>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </details>
+      ) : (
+        <div className="starting-package-missing">
+          The agent has not specified a concrete setup yet.
         </div>
       )}
     </section>
@@ -724,7 +944,7 @@ function StateFlowCanvas({
       <div className="flow-toolbar">
         <div>
           <h3>How the work continues</h3>
-          <p>{FLOW_ZOOM_DESCRIPTION[zoom]}</p>
+          {zoom > 0 && <p>{FLOW_ZOOM_DESCRIPTION[zoom]}</p>}
         </div>
         <div className="flow-zoom" aria-label="Change flow detail level">
           <button
@@ -1799,25 +2019,31 @@ export function LoopStudio({
               </div>
 
               <section className="sequence-section">
-                <StartingPackagePanel
+                <StartingWorkPanel
                   disabled={isSaving || isWorking || isAgentTesting}
-                  editing={editing === "starting-package"}
+                  editing={editing === "starting-work"}
                   items={loop.startingPackage}
                   onCancel={() => setEditing(null)}
                   onEdit={() => {
                     setFlowZoom(2);
-                    setEditing("starting-package");
+                    setEditing("starting-work");
                   }}
                   onPropose={() =>
                     void sendMessage(
-                      "Propose and add the missing Starting Package for this existing loop. Use exactly one domain-specific evidence-backed state, objective-grounded initial frontier, minimal working foundation, and first executable work item. Infer them from the objective, repository, and work function; do not ask me to invent raw methodology or infrastructure unless a cost, authority, risk, or material direction is genuinely mine to decide.",
-                      "Ask the agent to propose the starting package",
+                      "Complete the starting work and setup for this existing loop. The starting work must list the concrete items the user cares about—such as specific features, hypotheses with initial support status, design questions, opportunities, or cases—and select one fully specified first task. Put tools, infrastructure, experimental design, baselines, models, data, metrics, and other setup choices in the foundation item instead. Inspect what already exists and make safe, reversible setup choices yourself; ask only about cost, authority, risk, or a materially different direction.",
+                      "Ask the agent to propose concrete starting work",
                     )
                   }
                   onSave={(items) =>
                     void persistLoop(
-                      { ...loop, startingPackage: items },
-                      "Updated the starting package.",
+                      {
+                        ...loop,
+                        startingPackage: mergeStartingPackage(
+                          loop.startingPackage,
+                          items,
+                        ),
+                      },
+                      "Updated the starting work.",
                     )
                   }
                   zoom={flowZoom}
@@ -1843,6 +2069,36 @@ export function LoopStudio({
                   onSave={(state) => void saveState(state)}
                   onZoomChange={setFlowZoom}
                   sequence={sequence}
+                  zoom={flowZoom}
+                />
+
+                <SetupPanel
+                  disabled={isSaving || isWorking || isAgentTesting}
+                  editing={editing === "setup"}
+                  items={loop.startingPackage}
+                  onCancel={() => setEditing(null)}
+                  onEdit={() => {
+                    setFlowZoom(2);
+                    setEditing("setup");
+                  }}
+                  onPropose={() =>
+                    void sendMessage(
+                      "Specify the concrete setup required before this loop's first task. Inspect the workspace and choose safe, reversible defaults rather than leaving placeholders. For research, name the initial method, data, baseline, evaluation metric, minimal experiment, and concrete model family and size when relevant. For software, name the actual stack, repository conventions, test command, fixtures, and local services. For design or business work, name the real tools, materials, data, participants or channels, metrics, and decision limits. Ask me only for cost, authority, risk, private information, or a materially different direction.",
+                      "Ask the agent to specify the setup",
+                    )
+                  }
+                  onSave={(items) =>
+                    void persistLoop(
+                      {
+                        ...loop,
+                        startingPackage: mergeStartingPackage(
+                          loop.startingPackage,
+                          items,
+                        ),
+                      },
+                      "Updated the setup.",
+                    )
+                  }
                   zoom={flowZoom}
                 />
 

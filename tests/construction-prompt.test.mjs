@@ -36,18 +36,23 @@ test("rehearsal exhausts the frontier and rejects ungrounded continuation", () =
 });
 
 test("construction proposes a generalized domain-specific starting package", () => {
-  assert.match(daemon, /Propose a Starting Package before declaring the loop ready/);
+  assert.match(daemon, /Separate the user's starting work from setup/);
+  assert.match(daemon, /concrete objects the user cares about, not broad directions or setup chores/);
+  assert.match(daemon, /specific hypotheses or claims with supported, contradicted, or uncertain status/);
+  assert.match(daemon, /specific user-visible features with implemented, partial, failing, or not-started status/);
+  assert.match(daemon, /several specific initial items ready to pursue, not umbrella categories/);
+  assert.match(daemon, /Complete both Starting work and Setup in the same construction turn/);
+  assert.match(daemon, /Keep Initial Contents scannable in the web tables/);
   assert.match(daemon, /Use established professional vocabulary, not newly coined Loopit vocabulary/);
   assert.match(daemon, /Backlog -> Plan feature -> Implement -> Test -> Review or merge -> Update backlog/);
   assert.match(daemon, /Hypothesis -> Method or experiment plan -> Experiment -> Data -> Analysis/);
   assert.match(daemon, /Do not invent compound phrases such as Frame capability slice/);
   assert.match(daemon, /practitioner can understand the overview without a Loopit glossary/);
   assert.match(daemon, /Role values are internal Markdown structure, not user-facing vocabulary/);
-  assert.match(daemon, /state: the evidence-backed model/);
-  assert.match(daemon, /frontier: initial objective-backed/);
-  assert.match(daemon, /foundation: the minimal apparatus, tools, data, access, authority/);
-  assert.match(daemon, /first-work: one bounded, executable item/);
-  assert.match(daemon, /Do not assume software, cloud, or code/);
+  assert.match(daemon, /For research, specify the data or sample, method, baseline, evaluation metric/);
+  assert.match(daemon, /exact initial model family and size or a precise selection rule/);
+  assert.match(daemon, /For software, specify the existing or proposed stack/);
+  assert.match(daemon, /For UI\/UX, specify the design tool/);
 });
 
 test("construction keeps artifacts and runtime boundaries in separate sections", () => {
@@ -57,10 +62,12 @@ test("construction keeps artifacts and runtime boundaries in separate sections",
 });
 
 test("rehearsal verifies that the starting package can actually begin", () => {
-  assert.match(daemon, /Inspect the Starting Package before tracing the cycle/);
-  assert.match(daemon, /the H3 names must use terms familiar to a practitioner in that field/);
+  assert.match(daemon, /Inspect Starting work before tracing the cycle/);
+  assert.match(daemon, /specific hypotheses and their initial evidence status, features and implementation status/);
+  assert.match(daemon, /Inspect Setup separately/);
+  assert.match(daemon, /require the relevant data or sample, method, baseline, evaluation metric/);
   assert.match(daemon, /Fail both generic engine language and newly invented compound jargon/);
   assert.match(daemon, /reject names such as Frame capability slice/);
-  assert.match(daemon, /first work is drawn from the frontier/);
+  assert.match(daemon, /Fail a loop that would require another user prompt merely to obtain its initial hypotheses/);
   assert.match(daemon, /pushing raw methodology, tool, infrastructure, or architecture selection onto a nonexpert/);
 });

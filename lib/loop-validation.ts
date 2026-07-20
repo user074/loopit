@@ -30,6 +30,12 @@ const UNFAMILIAR_VISIBLE_TERMS = [
   "frontier replenishment",
 ];
 
+const SETUP_PLACEHOLDER_PATTERNS = [
+  /\b(?:tbd|to be determined|choose later|decide later)\b/i,
+  /\b(?:choose|select|define)\s+(?:a\s+|the\s+)?(?:model|tool|method|stack|baseline|environment)\s+later\b/i,
+  /^(?:set up|configure|establish|choose|select|define)\s+(?:the\s+)?(?:infrastructure|environment|baseline|model|tool|method|stack|test setup)\.?$/i,
+];
+
 function finding(
   id: string,
   severity: ValidationFinding["severity"],
@@ -195,6 +201,22 @@ export function validateLoop(loop: LoopDefinition): ValidationFinding[] {
         "Use familiar professional language",
         `Replace generic or invented labels with established terms a practitioner already uses: ${genericVisibleElements.map((item) => item.name).join(", ")}.`,
         genericVisibleElements[0].id,
+      ),
+    );
+  }
+
+  const setup = startingPackage.find((item) => item.role === "foundation");
+  const setupPlaceholders = setup?.initialContents.filter((content) =>
+    SETUP_PLACEHOLDER_PATTERNS.some((pattern) => pattern.test(content.trim())),
+  );
+  if (setup && setupPlaceholders?.length) {
+    findings.push(
+      finding(
+        "setup-placeholder-language",
+        "warning",
+        "Specify the setup before starting",
+        `Replace setup chores or deferred choices with concrete selections the first task can use: ${setupPlaceholders.join(", ")}.`,
+        setup.id,
       ),
     );
   }

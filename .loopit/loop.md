@@ -1,329 +1,282 @@
 ---
 loopit: 1
-revision: 5
+revision: 3
 status: draft
-completion-policy: confirm
-start: frame-capability-slice
+completion-policy: continuous
+start: plan-experiment
 ---
 
-# Job application agent development loop
+# Improve visual evidence use in VLMs
 
 ## Objective
 
-Develop a privacy-conscious, testable job application agent that can ingest a user-approved profile and resume, discover relevant jobs, rank them against declared interests, prepare or submit truthful applications within explicit user authority, prevent duplicate or unauthorized submissions, detect interview-related messages in an authorized mailbox, notify the user, and preserve an inspectable action history. Build it through a familiar software development cycle: choose a backlog item, plan the feature, implement it, test it, review the results, and update the backlog until the agreed product scope is complete.
+Develop and validate methods that make vision-language models use task-relevant visual evidence when that evidence is sufficient for the answer. Demonstrate progress with controlled evaluations that distinguish visual perception failures, cross-modal integration failures, and answer-generation failures from reliance on language priors.
 
 ## Starting Package
 
-### Current product status
+### Hypothesis status
 
-**ID:** `initial-job-agent-evidence-map`
+**ID:** `current-findings`
 **Role:** `state`
-**Description:** What is currently implemented, tested, constrained, or still unverified in the job application agent.
+**Description:** Specific claims about why VLMs fail to use sufficient visual evidence, each labeled by its current evidence status.
 
 #### Initial Contents
 
-- Observed baseline: the inspected repository contains Loopit's construction application, but it provides no observed implementation, build, fixtures, or test evidence for the proposed job-application agent.
-- Before development begins, create revision 1 of Product status and feature backlog at `.loopit/runtime/job-agent/product-status.md`, using this starting point and the first planned feature; setup is ready when that file can be read back.
-- Mark profile and resume ingestion, privacy controls, job discovery, interest matching, application preparation or authorized submission, duplicate prevention, interview-email detection, notification delivery, and action history as `unverified`; do not describe any of them as working.
-- Record the current product constraints: truthful applicant data only, mock integrations by default, no real credentials or personal resume data during the first feature, and no live application submission without explicit permission.
-- For each feature, reserve space for its plan, code or commit reference, test results, known limitations, and source information once those results exist.
+- `Reported, not reproduced` — the current VLM often answers incorrectly even when the image appears to contain sufficient evidence.
+- `H1 — Weak visual sensitivity · untested` — answers are less sensitive to image masking and counterfactual image edits than they should be, indicating reliance on language priors.
+- `H2 — Perception bottleneck · untested` — failures that recover under an oracle textual description are primarily visual perception failures.
+- `H3 — Answer-generation bottleneck · untested` — failures that persist with an oracle textual description are primarily answer-generation or task-reasoning failures rather than visual perception failures.
+- `H4 — Cross-modal integration · untested` — cases where the model extracts the relevant visual content but does not change its answer under counterfactual edits indicate a cross-modal integration failure.
+- `H5 — Evidence-first prompting · untested` — requiring an explicit visual-evidence extraction step before answering improves counterfactual consistency without materially reducing intact-image accuracy.
 
-### Feature backlog
+### Hypotheses to test
 
-**ID:** `initial-job-agent-capability-gaps`
+**ID:** `research-questions`
 **Role:** `frontier`
-**Description:** The initial list of job-agent features that still need to be built and tested, ordered by their contribution to the product objective.
+**Description:** The initial ranked list of testable hypotheses about perception, cross-modal integration, answer generation, and language-prior reliance.
 
 #### Initial Contents
 
-- `PROFILE-01 — Profile and resume import`: no implementation or tests exist yet. Done when synthetic profiles and resumes produce the required fields, report missing or conflicting data, keep field sources, and do not log raw resume text.
-- `DISCOVERY-02 — Job discovery`: no job-source adapter or tests exist yet. Done when an approved test source produces deduplicated job records with source links and clear error handling.
-- `MATCHING-03 — Interest-based job ranking`: no ranking implementation or evaluation exists yet. Done when representative good, poor, and ambiguous matches receive reproducible rankings with understandable reasons.
-- `APPLICATION-04 — Safe application preparation`: no form mapping, duplicate prevention, or approval flow exists yet. Done when tests use only approved applicant facts, surface unanswered sensitive fields, follow the approval policy, prevent duplicate submissions, and record every attempted action without bypassing site safeguards.
-- `MESSAGES-05 — Interview messages and notifications`: no mailbox classifier or notification test exists yet. Done when approved test messages verify detection, non-detection, duplicate handling, and notification delivery through the selected channel.
+- `H1 — Weak visual sensitivity`: masking or counterfactually changing answer-relevant image evidence will change the model's answer less often than expected from the task labels.
+- `H2 — Perception bottleneck`: oracle text describing the relevant image evidence will recover a substantial fraction of intact-image failures.
+- `H3 — Answer-generation bottleneck`: a meaningful fraction of failures will persist even with correct oracle text, showing that perception alone is insufficient.
+- `H4 — Cross-modal integration bottleneck`: on some examples the model can report the relevant visual content when asked directly but fails to use it in the final task answer.
+- `H5 — Evidence-first prompting`: extracting relevant visual evidence before answering will increase counterfactual answer consistency while preserving most intact-image accuracy.
 
-### Local development and test environment
+### Experiment setup
 
-**ID:** `local-applicant-profile-sandbox`
+**ID:** `experiment-setup`
 **Role:** `foundation`
-**Description:** The local tools, test data, and Git workflow needed to implement and test the first feature without cloud services, external accounts, or real personal data.
+**Description:** A fully specified minimal VLM experiment that can be run before expanding model, data, or compute scope.
 
 #### Initial Contents
 
-- Use an isolated TypeScript module, a focused local test command, and a stable branch or commit reference as the initial build and inspection boundary.
-- Prepare synthetic, non-sensitive fixtures for one valid structured profile and plain-text resume, one missing-required-field case, and one conflicting-field case; label all fixtures as fabricated test data.
-- Define a minimal applicant data structure covering contact placeholders, experience, education, skills, job interests, location or work-mode preferences, and the source of each field.
-- Apply a default privacy rule that tests may assert validation and redaction behavior but may not print or persist raw resume contents outside the synthetic fixture set.
-- Store development notes and test results under `.loopit/runtime/job-agent/`; keep code in Git and record the exact commit or branch in the Test results.
-- Defer scrapers, browser automation, mailbox connections, notification providers, credentials, and live submissions because none is required for the first feature.
+- `Model` — use `Qwen/Qwen2.5-VL-3B-Instruct` initially; reserve the 7B checkpoint for replication only after the minimal test is informative and compute permits it.
+- `Environment` — use Python 3.11 with PyTorch, Transformers, Pillow, and Datasets in an isolated environment; lock package versions and record the exact model revision.
+- `Diagnostic set` — human-check 40 examples: 20 TextVQA and 20 ChartQA items whose answers are visibly recoverable, subject to dataset availability and license terms.
+- `Conditions` — run intact image, answer-relevant region masked, controlled counterfactual edit where feasible, and oracle text with the same question; use temperature 0 and a 64-token output limit.
+- `Metrics` — report normalized accuracy, intact-to-masked accuracy drop, counterfactual answer-flip accuracy, and oracle-text recovery separately for TextVQA and ChartQA.
+- `Baseline` — use direct question answering with no evidence-extraction instruction; test an evidence-first prompt only after the baseline.
+- `Minimal budget` — run 160 baseline inferences (40 examples × 4 conditions), no training, then test the evidence-first prompt on the same examples only if weak visual sensitivity is reproduced.
+- `Experiment record` — preserve example IDs, transformed images, prompts, raw outputs, normalized answers, metrics, analysis code, checkpoint revision, hardware, and seeds.
 
-### Build profile and resume import
+### Test H1 on Qwen2.5-VL-3B
 
-**ID:** `first-applicant-profile-slice`
+**ID:** `baseline-reliance-test`
 **Role:** `first-work`
-**Description:** The first feature selected from the backlog: import a synthetic applicant profile and resume into a consistent data structure and verify its privacy behavior.
+**Description:** The first experiment tests whether Qwen2.5-VL-3B answers respond appropriately when answer-relevant visual evidence is masked or counterfactually changed.
 
 #### Initial Contents
 
-- Implement a local parser that accepts the synthetic structured profile plus plain-text resume and produces the agreed applicant data structure with the source of each field.
-- Reject missing required inputs explicitly, report conflicting profile and resume fields without silently choosing one, and prevent raw resume contents from appearing in logs or generated evidence.
-- Deliver a branch or commit containing the parser, schema, fixtures, focused tests, and local run instructions as Working code.
-- Test valid, missing-field, conflicting-field, and no-raw-data-logging scenarios; record only observed outcomes in Test results.
-- Exclude live websites, real applicant data, job ranking, form submission, mailbox access, and notifications from this feature.
-- Mark this backlog item done only when the data conversion, validation, field-source, conflict, and privacy tests pass; otherwise return the failed checks to the backlog during review.
+- Create and human-check the 40-example TextVQA and ChartQA diagnostic set, including the answer-relevant region and counterfactual edit where feasible.
+- Run the 160 baseline inferences under the fixed decoding settings and calculate normalized accuracy, masking sensitivity, counterfactual flip accuracy, and oracle recovery rate by task.
+- Mark H1 supported only if counterfactual answer-flip accuracy is materially below the human-checked expected flip rate and the result is not explained by a failed image edit; otherwise mark it contradicted or unresolved.
+- Produce one Experiment report separating observations from interpretation, with per-example outputs, aggregate tables, confounds, and the next discriminating experiment for H2, H3, or H4.
 
 ## Artifacts
 
-### Product status and feature backlog
+### Research findings
 
-**ID:** `job-agent-capability-map`
-**Description:** The versioned record at `.loopit/runtime/job-agent/product-status.md` of implemented features, test evidence, known constraints, and prioritized backlog items. It covers profile and resume import, privacy, job discovery, matching, truthful and nonduplicate applications, interview-email detection, notifications, and action history.
+**ID:** `research-findings`
+**Description:** Versioned claims about the target VLM, supported and contradictory evidence, confidence, scope, known limitations, and the experiment reports that justify each update.
 
-### Feature plan
+### Research agenda
 
-**ID:** `feature-slice-brief`
-**Description:** The implementation plan at `.loopit/runtime/job-agent/features/<feature-id>/plan.md` for one backlog item, including scope, acceptance criteria, failure cases, privacy constraints, excluded work, and tests required before the feature can be marked done.
+**ID:** `research-agenda`
+**Description:** Ranked hypotheses and evidence gaps. Every item cites the objective criterion it advances, the result or scope change that created it, why it remains unresolved and non-duplicative, and the evidence that would retire it.
 
-### Working code
+### Experiment plan
 
-**ID:** `testable-job-agent-build`
-**Description:** A branch or commit containing the implementation, automated tests, test data, and run instructions for the selected feature. If implementation is blocked, Test results record the failed attempt and its cause.
+**ID:** `experiment-plan`
+**Description:** One bounded hypothesis and protocol with its link to the research agenda, expected discriminating outcomes, dataset and model scope, controls, metrics, analysis method, resource limit, stopping rule, and required provenance.
 
-### Test results
+### Experiment report
 
-**ID:** `feature-result`
-**Description:** The observed test record at `.loopit/runtime/job-agent/features/<feature-id>/test-results.md` for one Feature plan. It references the code commit, environment, commands, test data, outputs, passed and failed checks, known limitations, and follow-up bugs so another developer can review or continue the work.
+**ID:** `experiment-report`
+**Description:** The portable research handoff linking the experiment plan and prior findings revision to exact configurations, data and code references, per-example outputs, metrics, plots or tables, completed, partial, failed, or blocked outcome, analysis verdict, confounds, unresolved findings, and proposed follow-up work.
 
-### Review decision
+### Decision request
 
-**ID:** `product-review-disposition`
-**Description:** The review outcome at `.loopit/runtime/job-agent/review.md`: merge or revise the feature, add or reprioritize backlog work, ask the user for one product decision, wait for a named external result, or propose that the agreed product scope is complete.
+**ID:** `decision-request`
+**Description:** One focused human-owned choice or pause request with the relevant evidence, recommendation, alternatives, resource or risk implications, and consequence of waiting.
 
-### User decision
+### Research decision
 
-**ID:** `boundary-input`
-**Description:** A product, privacy, permission, or risk decision recorded at `.loopit/runtime/job-agent/user-decision.md` so development can continue without relying on chat history.
-
-### Runtime checkpoint
-
-**ID:** `runtime-checkpoint`
-**Description:** A checkpoint at `.loopit/runtime/job-agent/checkpoint.md` recording the current development step, exact input files and versions, partial work, last safe action, interruption cause, and where a fresh session should resume. A checkpoint is never treated as completed development work.
-
-### Release review
-
-**ID:** `completion-challenge`
-**Description:** An independent review at `.loopit/runtime/job-agent/release-review.md` that compares the proposed release with the agreed scope and test results. It identifies blocking bugs, one question for the user, or no blocking issue; it cannot approve evidence that has not been observed.
+**ID:** `research-decision`
+**Description:** The researcher's recorded choice about scope, model or task priority, resource use, risk, scheduled observation, continuation, or conclusion.
 
 ## Boundaries
 
-### Live access and personal data
+### Researcher judgment
 
-**ID:** `live-action-authority`
+**ID:** `researcher-judgment`
 **Kind:** `interrupt`
-**Description:** Pause before using personal credentials or live accounts, exposing profile or resume data outside approved systems, submitting or withdrawing a real application, answering sensitive questions, or accepting material site terms. Never fabricate applicant facts or bypass site safeguards. If permission is missing, block the live action, save a Runtime checkpoint, record the problem in Test results, and request one User decision before development continues.
+**Description:** Pause when progress requires a consequential model, task, publication, risk, or scope choice that the evidence cannot determine.
 
-### Time or cost limit
+### Compute or access limit
 
-**ID:** `runtime-budget-reached`
+**ID:** `compute-access-limit`
 **Kind:** `budget`
-**Description:** Pause at the configured time, spend, or resource limit after saving a Runtime checkpoint. Resume the same development step later; never treat an interrupted feature as completed work.
+**Description:** Pause before exceeding authorized compute, data access, API cost, hardware time, or licensing constraints; preserve a blocked experiment report before requesting a decision.
 
-### Resume after interruption
+### Research pause
 
-**ID:** `interrupted-session-recovery`
+**ID:** `research-pause`
 **Kind:** `interrupt`
-**Description:** At each development step and saved output, refresh the Runtime checkpoint. After a session or tool interruption, verify the recorded files and partial work, then resume at the last safe action without duplicating external actions or claiming completion.
-
-### Accepted release
-
-**ID:** `accepted-job-agent-outcome`
-**Kind:** `complete`
-**Description:** Finish only after an independent Release review finds no blocking issue and the user accepts the agreed product scope. Keep optional enhancements in the backlog without silently expanding the release.
+**Description:** Because the research policy is continuous, a conclusion candidate, an intentional stopping point, or a scheduled observation is presented to the researcher instead of being accepted silently.
 
 ## States
 
-### Plan the next feature
+### Plan experiment
 
-**ID:** `frame-capability-slice`
+**ID:** `plan-experiment`
 **Kind:** `decide`
-**Summary:** Choose the highest-priority backlog item and define its scope, acceptance criteria, and tests.
+**Summary:** Choose the highest-value unresolved hypothesis and design one controlled test.
 
 #### Reads
 
-- Product status and feature backlog
-- Build profile and resume import
+- Research findings
+- Research agenda
+- Research decision
 
 #### Instruction
 
-On the first iteration, plan Build profile and resume import. After that, compare Product status and feature backlog with the objective and choose the highest-priority unresolved feature. Confirm why it matters, why it is not already done, and which tests would allow it to be marked complete. Write one Feature plan with bounded scope, acceptance criteria, failure cases, privacy and permission constraints, excluded work, and tests another developer can run without chat history.
+Compare the current findings with the objective and select one unresolved, non-duplicative question whose answer could change a research belief or intervention choice. Write a bounded experiment plan that states the hypothesis, rival explanations, controlled conditions, model and dataset scope, measurements, analysis method, success and failure interpretations, resource ceiling, stopping rule, and reproducibility requirements. Prefer the smallest test that can discriminate among perception, integration, answer-generation, and language-prior explanations. If a required model, dataset, authority, or consequential scope choice is missing, write one decision request instead of inventing it.
 
 #### Writes
 
-- Feature plan
+- Experiment plan
+- Decision request
 
 #### Completion
 
-Exactly one Feature plan is tied to a prioritized backlog item and contains enough information for implementation to begin.
+Either the experiment plan is executable within the recorded setup and resource limit, or one focused decision request identifies the missing human-owned input.
 
 #### Transitions
 
 | Next state | When | Kind | ID |
 | --- | --- | --- | --- |
-| `build-capability-slice` | The Feature plan defines the scope, acceptance criteria, constraints, and required tests | `normal` | `frame-to-build` |
+| `run-experiment` | The experiment plan is executable and all required access is available | `normal` | `plan-to-run` |
+| `review-boundary` | A consequential choice, permission, or resource authorization is required | `interrupt` | `plan-to-boundary` |
 
-### Implement the feature
+### Run experiment
 
-**ID:** `build-capability-slice`
+**ID:** `run-experiment`
 **Kind:** `act`
-**Summary:** Write the code and focused automated tests described in the Feature plan.
+**Summary:** Execute the controlled VLM comparison and preserve reproducible outputs.
 
 #### Reads
 
-- Feature plan
-- Local development and test environment
+- Experiment plan
 
 #### Instruction
 
-Implement only the planned feature, using the Local development and test environment for the first iteration and approved test integrations later. Produce Working code and begin Test results that reference the Feature plan, code commit, environment, checks already run, known limitations, and any failed or blocked implementation attempt. Failed work still goes to testing and review; do not hide it or invent a separate process.
+Execute only the planned conditions within the resource ceiling. Preserve exact inputs, model and environment identifiers, raw per-example outputs, logs, seeds, failures, and stable references to code, data, checkpoints, tables, and plots. Write an experiment report even when execution is partial, failed, or blocked; do not hide negative outcomes or change the hypothesis after seeing the results.
 
 #### Writes
 
-- Working code
-- Test results
+- Experiment report
 
 #### Completion
 
-Another developer can inspect the Working code and preliminary tests, or Test results clearly explain why implementation failed or is blocked.
+The experiment report records a completed, partial, failed, or blocked outcome and contains enough provenance and observable output for a fresh researcher to inspect the run.
 
 #### Transitions
 
 | Next state | When | Kind | ID |
 | --- | --- | --- | --- |
-| `sandbox-evaluate-slice` | Working code or a documented failed or blocked implementation attempt is ready for testing | `normal` | `build-to-sandbox-evaluation` |
+| `analyze-results` | An inspectable experiment report exists for any execution outcome | `normal` | `run-to-analyze` |
 
-### Test the feature
+### Analyze results
 
-**ID:** `sandbox-evaluate-slice`
+**ID:** `analyze-results`
 **Kind:** `evaluate`
-**Summary:** Run the planned automated and local tests, then record what passed, failed, or remains blocked.
+**Summary:** Test the hypothesis against metrics, counterfactual behavior, and qualitative failures.
 
 #### Reads
 
-- Feature plan
-- Working code
-- Test results
+- Experiment plan
+- Experiment report
 
 #### Instruction
 
-Run the Working code against every acceptance criterion and the relevant failure, privacy, truthfulness, duplicate-action, and permission cases in the Feature plan. Add only observed outcomes to Test results, including the environment and reproduction steps. If the code cannot run, reproduce the failure when possible and record why testing could not continue. List bugs and follow-up work for review without adding them to the backlog automatically.
+Check data integrity and planned analyses before interpreting the outcome. Compare intact, masked, counterfactual, and oracle-text behavior where applicable; report uncertainty and effect sizes rather than accuracy alone. Examine representative successes and failures, test rival explanations, identify confounds and regressions, and state whether the evidence supports, contradicts, or leaves the hypothesis unresolved. Add analysis, plots or tables, a verdict, limitations, and candidate follow-up questions to the experiment report without converting speculation into evidence.
 
 #### Writes
 
-- Test results
+- Experiment report
 
 #### Completion
 
-Test results show the outcome of every planned scenario, known limitations, and enough detail for another developer to review the feature.
+The experiment report contains an evidence-linked verdict, uncertainty, confounds, limitations, and inspectable analysis for any completed, partial, failed, or blocked run.
 
 #### Transitions
 
 | Next state | When | Kind | ID |
 | --- | --- | --- | --- |
-| `update-capability-map` | Test results record what passed, failed, or remains blocked | `normal` | `evaluation-to-capability-update` |
+| `update-research` | The result has been interpreted, including negative or blocked outcomes | `normal` | `analyze-to-update` |
 
-### Review results and update the backlog
+### Update research record
 
-**ID:** `update-capability-map`
+**ID:** `update-research`
 **Kind:** `update`
-**Summary:** Review the code and tests, update product status, and choose the next backlog item or release decision.
+**Summary:** Revise the findings and derive the next evidence-backed research question.
 
 #### Reads
 
-- Product status and feature backlog
-- Feature plan
-- Test results
-- User decision
-- Release review
+- Research findings
+- Research agenda
+- Experiment report
 
 #### Instruction
 
-Review Test results against the Feature plan. Update Product status and feature backlog with verified behavior, failed checks, and known constraints. Mark a backlog item done only when its acceptance criteria pass. Add a bug or follow-up only when it supports an objective requirement, is caused by a test result or explicit user scope change, is not a duplicate, and has a clear condition for completion.
+Integrate the report into the research findings: update only claims warranted by the evidence, preserve contradictory evidence and scope limits, and cite the report. Resolve, split, reprioritize, or retain agenda items accordingly. Every new agenda item must cite the objective criterion it advances; the report, observation, missing evidence, failed check, or explicit human scope change that created it; why it remains unresolved and is not a duplicate; and the evidence that would retire it.
 
-If the backlog is empty, compare Product status and test evidence with the objective and record exactly one Review decision: add one or more justified backlog items, wait for a named external result, ask the user for one product decision, or propose a release with its supporting tests and remaining assumptions. Never stop silently or invent unrelated features merely to keep working. Apply any returned User decision before choosing.
-
-When review proposes a release, run a fresh Release review. Add blocking bugs to the backlog, send one product question or rejection to `await-boundary-input`, and finish only when the review finds no blocking issue and the user accepts the proposed release.
+Then compare the complete findings and agenda with the objective and produce exactly one justified outcome: one or more objective-backed agenda items; a scheduled observation with a date or trigger when external change is expected; one human-owned decision; or a conclusion candidate supported by the declared evidence. Never add unrelated ideas merely to keep the loop active. Record a scheduled observation, human decision, conclusion candidate, or exhausted resource limit in one decision request.
 
 #### Writes
 
-- Product status and feature backlog
-- Review decision
+- Research findings
+- Research agenda
+- Decision request
 
 #### Completion
 
-Product status reflects the test results and any User decision or Release review, every backlog change is explained, and one next action is recorded for another developer.
+The research record is internally consistent, the report is traceable from every changed claim, and exactly one next outcome is recorded without relying on hidden conversation context.
 
 #### Transitions
 
 | Next state | When | Kind | ID |
 | --- | --- | --- | --- |
-| `frame-capability-slice` | Review leaves one or more prioritized backlog items ready for development | `continue` | `update-to-frame` |
-| `await-boundary-input` | Review needs one user decision or named external result before development can continue | `interrupt` | `update-to-boundary` |
-| `preserve-accepted-outcome` | Review proposes a release, the independent Release review finds no blocking issue, and the user accepts it | `complete` | `update-to-accepted-outcome` |
+| `plan-experiment` | One or more justified research agenda items are ready for another bounded test | `continue` | `update-to-plan` |
+| `review-boundary` | The justified outcome is a scheduled observation, human-owned decision, conclusion candidate, or resource pause | `interrupt` | `update-to-boundary` |
 
-### Ask for a user decision
+### Review research boundary
 
-**ID:** `await-boundary-input`
+**ID:** `review-boundary`
 **Kind:** `interrupt`
-**Summary:** Pause for one product, privacy, permission, or risk decision that only the user can make.
+**Summary:** Present one research choice or pause condition for the researcher to resolve.
 
 #### Reads
 
-- Review decision
+- Decision request
+- Research findings
+- Research agenda
 
 #### Instruction
 
-Present one focused question with the relevant test evidence, recommendation, and consequence, or name the external result and when to check it. Do not infer personal, legal, privacy, site-policy, or product preferences. Record the answer as User decision so development can continue without chat history.
+Present one focused question with the evidence, recommendation, alternatives, cost or risk, and effect on the objective. Wait for the researcher to authorize resources, choose or change scope, schedule resumption, accept a pause or conclusion, or supply missing intent. Record the answer without treating silence as approval.
 
 #### Writes
 
-- User decision
+- Research decision
 
 #### Completion
 
-The requested human direction or scheduled observation is recorded with its source and scope.
+The researcher's decision is recorded durably; continuation occurs only when the decision authorizes a next experiment or changes the agenda.
 
 #### Transitions
 
 | Next state | When | Kind | ID |
 | --- | --- | --- | --- |
-| `update-capability-map` | The User decision or named external result is available for review | `normal` | `boundary-to-capability-update` |
-
-### Record the accepted release
-
-**ID:** `preserve-accepted-outcome`
-**Kind:** `terminal`
-**Summary:** Save the accepted release scope, supporting tests, and known limitations, then stop.
-
-#### Reads
-
-- Product status and feature backlog
-- Review decision
-- Test results
-- Release review
-
-#### Instruction
-
-Record the accepted product scope, Release review, user acceptance, supporting Test results, known limitations, and optional backlog items in the Review decision so another developer can understand the release without chat history.
-
-#### Writes
-
-- Review decision
-
-#### Completion
-
-The accepted outcome and its evidence, assumptions, limitations, and optional follow-ups are durably preserved.
-
-#### Transitions
-
-| Next state | When | Kind | ID |
-| --- | --- | --- | --- |
+| `plan-experiment` | The researcher authorizes continuation and the agenda contains a justified testable item | `normal` | `boundary-to-plan` |

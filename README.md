@@ -13,7 +13,7 @@ This version focuses only on the first product problem: working with an agent to
 The screen has two connected parts:
 
 - **Construction chat** launches the Codex or Claude Code CLI already installed and authenticated on the local machine. A new project begins empty: the agent first asks what work the user wants to keep progressing, then proposes the smallest useful loop. Conversations survive reloads as local Markdown files in `.loopit/conversations/`. **New** starts with an empty agent session, while **History** reopens a past conversation together with its own resumable CLI context.
-- **Visual loop editor** first shows the agent-proposed starting point, then the recurring domain loop and the deliverable passed at each handoff. The UI uses the work function's own vocabulary; “Starting Package,” “state,” and “frontier” remain internal contract terms. Semantic zoom moves from familiar names, to purposes and handoffs, to full contents and rules. Pauses and stopping rules stay in a separate collapsed view. The user can edit the objective, starting point, completion policy, state contracts, and transitions directly; every visual save rewrites `.loopit/loop.md`, which the agent reads on its next turn.
+- **Visual loop editor** shows three things in order: the specific starting work the user cares about, the recurring domain loop and its handoffs, then a separate concrete setup. For research, starting work means named hypotheses and their evidence status; for software it means features and implementation status; for design or business it means the actual questions, decisions, opportunities, cases, or deliverables being tracked. Compact tables keep those items scannable, the first task is visually emphasized, and long explanations and setup specifications stay collapsed until requested. Semantic zoom moves from familiar names, to purposes and handoffs, to full contents and rules. The user can edit each part directly; every visual save rewrites `.loopit/loop.md`, which the agent reads on its next turn.
 - **Preflight testing** can trace every transition in seconds, visibly prove that the recurrence closes, and then launch a fresh read-only local agent to challenge state contracts and edge cases. The rehearsal cannot modify or execute the project; its latest Markdown report is saved at `.loopit/test-report.md`. A non-passing result automatically becomes the next construction turn: the agent repairs agent-owned gaps and asks one focused question for missing human intent or authority.
 
 Requirements: Node.js 22.13 or newer and at least one locally authenticated agent CLI (`codex` or `claude`). No separate API key or hosted Loopit account is used.
@@ -106,18 +106,20 @@ The loop engine can remain consistent across domains, but the loop structure doe
 
 These are examples, not preset templates. The construction agent should inspect the actual project and propose the smallest concrete loop that fits it. The user then corrects its phases, handoffs, and priorities before verification.
 
-### Bootstrap the loop with a Starting Package
+### Start with the work people actually care about
 
-A valid recurring cycle can still fail to start when its initial state and work are empty. Before the first iteration, the construction agent therefore proposes a **Starting Package** translated into the work function's own language. It always fills four semantic roles:
+A valid recurring cycle can still fail to start when its initial work is empty. Before the first iteration, the construction agent therefore proposes a **Starting Package** translated into the work function's own language. The UI separates it into **Starting work** above the cycle and **Setup** below the cycle. The internal Markdown contract still fills four semantic roles:
 
 1. **Evidence-backed state** — what is currently known, observed, decided, or already exists; proposals remain explicitly unproven.
 2. **Initial frontier** — objective-grounded gaps, questions, opportunities, cases, or uncertainties that can justify work.
 3. **Working foundation** — the minimum tools, materials, data, access, authority, templates, environment, or conventions required to produce and inspect a real result.
 4. **First work item** — one bounded item selected from the frontier that is executable with the proposed foundation and produces evidence for the next transition.
 
-Those four roles are the general contract, not the visible vocabulary. Research might begin with current beliefs, hypotheses, experimental equipment and data access, and a first experiment. Design might begin with user research, design questions, a design system and prototype tools, and a first exploration. Business operations might begin with the current operating picture, an opportunity or case list, authorized tools and playbooks, and a first action. Software might begin with current product status, a feature backlog, a development and test environment, and a first feature—but Loopit must not assume code, cloud infrastructure, or a technology stack when the work does not require them.
+The state, frontier, and first item form Starting work. They must itemize what the user actually wants to learn, build, decide, or improve—not broad directions such as “establish a baseline” or “set up infrastructure.” Research starts with specific hypotheses or claims labeled supported, contradicted, uncertain, or untested, plus one fully proposed experiment. Software starts with specific features labeled implemented, partial, failing, or not started, plus one bounded feature and its acceptance tests. Design starts with concrete flows, screens, findings, or design questions. Business work starts with actual opportunities, decisions, campaigns, accounts, or cases.
 
-The agent should infer and propose this package from the objective, existing workspace, and work function. It should choose the smallest reversible foundation that lets the work produce trustworthy results. A nonexpert should be asked about intent, cost, authority, risk, or material constraints only when those choices genuinely belong to the human; they should not be asked to invent raw methodology or infrastructure from scratch.
+The foundation becomes a separate Setup specification. It records concrete choices sufficient to begin the first task: for research, the data or sample, method, baseline, metrics, minimal experiment, and model family and size when relevant; for software, the stack, repository conventions, fixtures, test command, local services, and development workflow; for UI/UX, the design tool, platform and viewport, design system, prototype fidelity, evaluation method, and success criteria; for business, the data sources, time horizon, channel, metric, working template, and authority or budget limits.
+
+The agent should infer and propose both Starting work and Setup from the objective, existing workspace, and work function in the same construction turn. It should inspect what already exists, choose the smallest safe and reversible defaults for missing agent-owned details, and label proposals honestly rather than claiming they are already verified. A nonexpert should be asked only about intent, cost, authority, risk, private information, or a materially different direction—not made to invent raw methodology, tools, or infrastructure and then ask the agent a second time.
 
 The Markdown roles are engine metadata. Human-facing names must use established vocabulary from the profession, preferably reused from the project's existing documents and tools. A researcher sees current beliefs, hypotheses, method, experiment, data, and analysis. A developer sees product status, feature backlog, feature plan, implementation, tests, code review, and merge. A designer sees research findings, a design brief, wireframes or prototypes, critique or usability testing, and a design decision. “Domain-specific” is not permission to coin impressive-sounding compound nouns: if a practitioner would need a Loopit glossary to understand “capability evidence map,” “frame capability slice,” or “product review disposition,” translation has failed.
 
@@ -170,16 +172,17 @@ The user should not need to place nodes or write a loop specification manually. 
 2. Classify the loop subject as development, operation, research, design, or another concrete mode, and present that interpretation for correction.
 3. Inspect the existing project, tools, documents, and environment.
 4. Clarify the objective, success conditions, constraints, and available resources.
-5. Propose the domain-specific Starting Package: evidence-backed state, objective-grounded frontier, minimum working foundation, and first executable work item.
-6. Infer the chosen work mode's natural recurring cycle rather than imposing generic phases.
-7. Identify its existing deliverables, the producer and consumer of each handoff, and the judgment each handoff enables.
-8. Give every visible phase, Starting Package component, and artifact a concrete project-specific name.
-9. Define the smallest domain-named result package that makes the primary deliverable inspectable and portable across agents and sessions.
-10. Identify how each integrated result changes durable state and the frontier.
-11. Define how the objective and new evidence replenish the frontier, including the empty-frontier protocol and the rule that prevents unrelated busywork.
-12. Propose the smallest coherent concrete loop for the user to correct; do not ask the user to design it from scratch.
-13. Define runtime policies for autonomy, interruption, budget, recovery, and completion separately from the domain loop.
-14. Generate the edited loop, ask the user to confirm the important choices, and run a fresh-session rehearsal.
+5. Propose concrete Starting work: itemized hypotheses, features, design questions, opportunities, cases, or equivalent with their current status, plus one exact first task.
+6. Specify the separate Setup completely enough to begin that task, choosing safe reversible defaults for agent-owned methods, tools, models, baselines, data, and tests.
+7. Infer the chosen work mode's natural recurring cycle rather than imposing generic phases.
+8. Identify its existing deliverables, the producer and consumer of each handoff, and the judgment each handoff enables.
+9. Give every visible phase, Starting Package component, and artifact a concrete project-specific name.
+10. Define the smallest domain-named result package that makes the primary deliverable inspectable and portable across agents and sessions.
+11. Identify how each integrated result changes durable state and the frontier.
+12. Define how the objective and new evidence replenish the frontier, including the empty-frontier protocol and the rule that prevents unrelated busywork.
+13. Propose the smallest coherent concrete loop for the user to correct; do not ask the user to design it from scratch.
+14. Define runtime policies for autonomy, interruption, budget, recovery, and completion separately from the domain loop.
+15. Generate the edited loop, ask the user to confirm the important choices, and run a fresh-session rehearsal.
 
 ### Prove continuity
 
