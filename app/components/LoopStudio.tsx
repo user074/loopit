@@ -41,7 +41,11 @@ interface AgentHealth {
 
 interface Health {
   ok: boolean;
+  appRoot: string;
   projectRoot: string;
+  projectName: string;
+  runtimeAllowed: boolean;
+  runtimeBlockedReason: string | null;
   active: boolean;
   activePurpose?: "test" | "runtime" | null;
   agents: Record<AgentName, AgentHealth>;
@@ -1843,6 +1847,7 @@ export function LoopStudio({
       : null;
   const testPassed =
     currentAgentTest?.verdict === "pass" && currentStructurePasses;
+  const canStartRuntime = testPassed && health?.runtimeAllowed === true;
   const runtimeStartedAt = runtimeRun?.startedAt
     ? Date.parse(runtimeRun.startedAt)
     : 0;
@@ -2313,7 +2318,13 @@ export function LoopStudio({
   };
 
   const startRuntime = async () => {
-    if (!loop || !testPassed || isRuntimeRunning || isWorking || isAgentTesting) {
+    if (
+      !loop ||
+      !canStartRuntime ||
+      isRuntimeRunning ||
+      isWorking ||
+      isAgentTesting
+    ) {
       return;
     }
     setRuntimeError(null);
@@ -2382,9 +2393,19 @@ export function LoopStudio({
             <span>Construct a continuing loop</span>
           </div>
         </div>
-        <div className="connection-status">
+        <div
+          className={`connection-status ${
+            health?.runtimeAllowed === false ? "is-protected" : ""
+          }`}
+          title={health?.projectRoot}
+        >
           <span className={health?.ok ? "status-dot is-online" : "status-dot"} />
-          {health?.ok ? "Local project connected" : "Connecting…"}
+          <div>
+            <small>Target project</small>
+            <strong>{health?.ok ? health.projectName : "Connecting…"}</strong>
+            {health?.ok && <span>{health.projectRoot}</span>}
+          </div>
+          {health?.runtimeAllowed === false && <i>Runtime protected</i>}
         </div>
       </header>
 
@@ -3116,7 +3137,7 @@ export function LoopStudio({
                 className={`runtime-launch ${
                   isRuntimeRunning
                     ? "is-running"
-                    : testPassed
+                    : canStartRuntime
                       ? "is-ready"
                       : "is-locked"
                 }`}
@@ -3140,7 +3161,7 @@ export function LoopStudio({
                       </time>
                     </div>
                     <span>
-                      {isRuntimeRunning ? "Running" : testPassed ? "Ready" : "Locked"}
+                      {isRuntimeRunning ? "Running" : canStartRuntime ? "Ready" : "Locked"}
                     </span>
                   </div>
                 </header>
@@ -3149,14 +3170,22 @@ export function LoopStudio({
                     <strong>
                       {isRuntimeRunning
                         ? runtimeActivity
-                        : testPassed
+                        : health?.ok !== true
+                          ? "Confirm the target project"
+                          : health.runtimeAllowed === false
+                          ? "Choose a separate target project"
+                          : testPassed
                           ? "The current revision passed and can run"
                           : `Pass Test this loop for revision ${loop.revision} first`}
                     </strong>
                     <p>
                       {isRuntimeRunning
                         ? "A separate local worker is following the tested loop and writing durable project artifacts."
-                        : testPassed
+                        : health?.ok !== true
+                          ? "Runtime stays locked until the local daemon identifies the repository the agent will modify."
+                          : health.runtimeAllowed === false
+                          ? "The Loopit source tree is protected. Stop Loopit, open the separate repository the agent should modify, and launch Loopit from there."
+                          : testPassed
                           ? `Start a separate ${agent === "codex" ? "Codex" : "Claude"} worker from the declared first task and state.`
                           : "Runtime stays locked until the current revision passes every construction check."}
                     </p>
@@ -3173,7 +3202,7 @@ export function LoopStudio({
                     <button
                       className="button-primary button-large"
                       disabled={
-                        !testPassed ||
+                        !canStartRuntime ||
                         isWorking ||
                         isAgentTesting ||
                         isUnifiedTestRunning

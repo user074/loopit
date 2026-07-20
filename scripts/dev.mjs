@@ -1,19 +1,44 @@
-import { spawn } from "node:child_process";
-import path from "node:path";
+#!/usr/bin/env node
 
-const root = process.cwd();
-const nextCli = path.join(root, "node_modules", "next", "dist", "bin", "next");
-const daemonScript = path.join(root, "scripts", "loopit-daemon.mjs");
+import { spawn } from "node:child_process";
+import { stat } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const requestedProject =
+  process.env.LOOPIT_PROJECT || process.argv[2] || process.cwd();
+const projectRoot = path.resolve(requestedProject);
+const projectStats = await stat(projectRoot).catch(() => null);
+
+if (!projectStats?.isDirectory()) {
+  console.error(`Loopit target project does not exist: ${projectRoot}`);
+  process.exit(1);
+}
+
+const nextCli = path.join(appRoot, "node_modules", "next", "dist", "bin", "next");
+const daemonScript = path.join(appRoot, "scripts", "loopit-daemon.mjs");
+const childEnv = {
+  ...process.env,
+  LOOPIT_APP_ROOT: appRoot,
+  LOOPIT_PROJECT: projectRoot,
+};
+
+console.log(`Loopit control plane: ${appRoot}`);
+console.log(`Target project: ${projectRoot}`);
+if (projectRoot === appRoot) {
+  console.log("Runtime is locked while the Loopit source repository is the target.");
+}
 
 const children = [
   spawn(process.execPath, [daemonScript], {
-    cwd: root,
-    env: process.env,
+    cwd: projectRoot,
+    env: childEnv,
     stdio: "inherit",
   }),
   spawn(process.execPath, [nextCli, "dev", "-p", "3000"], {
-    cwd: root,
-    env: process.env,
+    cwd: appRoot,
+    env: childEnv,
     stdio: "inherit",
   }),
 ];

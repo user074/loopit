@@ -1,6 +1,11 @@
 # Running Loopit locally
 
-This runbook covers the construction gate and first local runtime worker. `npm run dev` starts two local processes together:
+This runbook covers the construction gate and first local runtime worker. Loopit separates two repositories:
+
+- The **Loopit repository** contains only the control-plane application.
+- The **target project** contains the work, its `.loopit` definition and history, and every file a runtime worker may modify.
+
+The `loopit` launcher starts two local processes together:
 
 - The web interface at `http://localhost:3000`.
 - The local-agent daemon at `http://127.0.0.1:4318`.
@@ -9,18 +14,33 @@ Both processes run on the local machine. Loopit does not require a separate host
 
 ## Start Loopit
 
-From the Loopit repository:
+Install or update the control plane once from the Loopit repository:
 
 ```bash
 node --version
 codex --version
 npm install
-npm run dev
+npm link
 ```
 
-Node.js must be version 22.13 or newer. `npm install` is needed the first time and whenever `package.json` or `package-lock.json` changes.
+Node.js must be version 22.13 or newer. `npm install` is needed the first time and whenever `package.json` or `package-lock.json` changes. `npm link` makes the local `loopit` launcher available without copying Loopit's source into another project.
 
-Keep that terminal open. When startup succeeds, it prints both the Loopit daemon address and the Next.js web address. Open [http://localhost:3000](http://localhost:3000) in a browser.
+Now change to the repository where the agent should do actual work and launch Loopit there:
+
+```bash
+cd /path/to/your-project
+loopit
+```
+
+Keep that terminal open. Startup prints both the immutable control-plane path and the target-project path, followed by the Loopit daemon and Next.js addresses. Open [http://localhost:3000](http://localhost:3000) in a browser and confirm that **Target project** in the header names the intended repository before constructing or running anything.
+
+If you do not want to use `npm link`, launch from the Loopit repository with an explicit absolute target path:
+
+```bash
+npm run dev -- /absolute/path/to/your-project
+```
+
+Running `npm run dev` without a target is control-plane development mode. The UI can open, but runtime is protected because the Loopit source repository is not a valid runtime target.
 
 To verify both parts without opening the UI:
 
@@ -29,7 +49,7 @@ curl --fail http://127.0.0.1:4318/api/health
 curl --head --fail http://127.0.0.1:3000
 ```
 
-The health response lists the local agent CLIs Loopit can find. If Codex is installed but reports a login problem, run `codex login status` and follow the CLI's login instructions.
+The health response lists `appRoot`, `projectRoot`, whether runtime is allowed, and the local agent CLIs Loopit can find. Verify that `projectRoot` is the intended external repository and differs from `appRoot`. If Codex is installed but reports a login problem, run `codex login status` and follow the CLI's login instructions.
 
 ## Stop the current agent turn
 
@@ -39,7 +59,7 @@ When a loop worker is active, use **Stop loop** in the Runtime section instead. 
 
 ## Stop Loopit
 
-Return to the terminal running `npm run dev` and press:
+Return to the terminal running `loopit` (or `npm run dev -- /path/to/target`) and press:
 
 ```text
 Control-C
@@ -47,7 +67,7 @@ Control-C
 
 The development wrapper sends a termination signal to both the web interface and the local-agent daemon. Closing the browser tab does not stop either process.
 
-Stopping Loopit preserves these files when they have been created:
+Stopping Loopit preserves these files in the target project when they have been created:
 
 - `.loopit/loop.md`, the versionable, agent-readable loop proposal.
 - `.loopit/session.json`, the active-conversation pointer and resumable local-agent session identifiers.
@@ -64,7 +84,7 @@ The separate **Test this loop** section follows structural checks and presents o
 1. **Trace every path** animates one ordinary recurrence and every alternate transition. It fails when the cycle does not close, a transition is missing, or a structural check blocks continuation. This test is deterministic and does not start an agent.
 2. A fresh Codex or Claude session with no construction-chat context challenges state inputs, completion conditions, recovery paths, interrupts, and completion exits, then saves a Markdown report. It also verifies that a first draft or completed iteration cannot masquerade as project completion: candidate completion must follow the selected policy and, for human-confirmed or evidence-based completion, pass through a fresh challenger. The rehearsal cannot modify files or execute the proposed production work. If the result needs work, Loopit repairs agent-owned gaps and opens a focused right-panel review for missing human intent, permission, facts, thresholds, or policy, then retests automatically.
 
-Passed unlocks **Start loop** at the bottom of the right panel. Start launches a separate local worker from the declared first task and state; it does not reuse the construction conversation. The worker may modify project files while following the tested loop, but it may not redesign `.loopit/loop.md`. The Continuous runtime clock counts the uninterrupted wall-clock interval during which that worker process is active and freezes when the process pauses, fails, completes, or is stopped. Neither construction test substitutes for representative runtime evidence; the loop must specify how the worker collects that evidence and routes failures.
+Passed unlocks **Start loop** at the bottom of the right panel only when the target is separate from the Loopit repository. Start launches a local worker with the target project as its working directory; it does not reuse the construction conversation. The worker may modify target-project files while following the tested loop, but it may not redesign `.loopit/loop.md` or modify the Loopit control-plane repository. The Continuous runtime clock counts the uninterrupted wall-clock interval during which that worker process is active and freezes when the process pauses, fails, completes, or is stopped. Neither construction test substitutes for representative runtime evidence; the loop must specify how the worker collects that evidence and routes failures.
 
 ## If the original terminal is gone
 
@@ -85,17 +105,17 @@ Confirm that both ports are clear by running the two `lsof` commands again. Avoi
 
 ## Run the two parts separately
 
-For debugging, use two terminals:
+For debugging the control plane, use two terminals in the Loopit repository and provide the same target to both processes:
 
 ```bash
 # Terminal 1
-npm run dev:daemon
+LOOPIT_PROJECT=/absolute/path/to/your-project npm run dev:daemon
 
 # Terminal 2
-npm run dev:web
+LOOPIT_PROJECT=/absolute/path/to/your-project npm run dev:web
 ```
 
-Press Control-C in each terminal to stop them. Normally, prefer `npm run dev` so startup and shutdown remain coordinated.
+Press Control-C in each terminal to stop them. Normally, prefer `loopit` from the target repository so startup, project identity, and shutdown remain coordinated.
 
 ## Common startup problems
 
@@ -115,13 +135,18 @@ codex --version
 Loopit also accepts a temporary per-run model override when diagnosing compatibility:
 
 ```bash
-LOOPIT_CODEX_MODEL=gpt-5.5 npm run dev
+cd /path/to/your-project
+LOOPIT_CODEX_MODEL=gpt-5.5 loopit
 ```
 
 ### The UI opens but cannot reach the local bridge
 
 Check `http://127.0.0.1:4318/api/health` and look at the terminal that launched Loopit. The daemon intentionally listens only on localhost, and the browser UI expects it on port 4318.
 
+### Runtime says to choose a separate target project
+
+Loopit was launched with its own source repository as the target. Stop it, change to the repository the agent should modify, and run `loopit` there. Alternatively, restart from the Loopit repository with `npm run dev -- /absolute/path/to/your-project`.
+
 ### `npm start` opens the UI but agent chat does not work
 
-`npm start` starts only the production web server. For the local construction MVP, use `npm run dev`, which starts the web interface and agent daemon together.
+`npm start` starts only the production web server. Use `loopit` from the target repository, which starts the web interface and agent daemon together with a shared target-project identity.

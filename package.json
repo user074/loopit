@@ -2,6 +2,9 @@
   "name": "loopit",
   "version": "0.1.0",
   "private": true,
+  "bin": {
+    "loopit": "scripts/dev.mjs"
+  },
   "engines": {
     "node": ">=22.13.0"
   },

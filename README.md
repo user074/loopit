@@ -21,12 +21,29 @@ The current runtime is one real worker turn, not yet the full continuous control
 
 Requirements: Node.js 22.13 or newer and at least one locally authenticated agent CLI (`codex` or `claude`). No separate API key or hosted Loopit account is used.
 
+Install the control plane once from this repository:
+
 ```bash
 npm install
-npm run dev
+npm link
 ```
 
-Then open [http://localhost:3000](http://localhost:3000). The web process and localhost-only agent daemon start together. Choose **Construct my first loop** or describe the work directly in chat. Construction-agent session pointers are remembered in `.loopit/session.json`, readable conversation histories in `.loopit/conversations/*.md`, and the loop proposal in the versionable `.loopit/loop.md`.
+Then launch it from the separate repository where the agent should work:
+
+```bash
+cd /path/to/your-project
+loopit
+```
+
+Open [http://localhost:3000](http://localhost:3000). The Loopit application still runs from this control-plane repository, but its working directory and all agent processes are rooted in the target project. The header names that target before any work begins. Choose **Construct my first loop** or describe the work directly in chat.
+
+The target owns `.loopit/loop.md`, conversations, test reports, session pointers, and runtime records. Construction, rehearsal, and runtime agents inspect that target; runtime workers may modify its project files. They do not run against the Loopit source repository. Launching `npm run dev` here remains useful for control-plane development, but **Start loop** is deliberately locked until Loopit is restarted with a separate target.
+
+For development without a global link, pass the target explicitly from the Loopit repository:
+
+```bash
+npm run dev -- /absolute/path/to/your-project
+```
 
 Markdown is the durable agent-facing source of truth, not the primary human interface. Loopit parses it into an internal graph for deterministic checks and presents the understandable, interactive version in the web UI. JSON is used only for machine-owned active-conversation and CLI-session identifiers; no generated JSON copy of a loop, conversation, or test report is committed or maintained.
 
@@ -35,7 +52,8 @@ See the [local runbook](RUNBOOK.md) for verification, stopping the current agent
 Loopit inherits the selected CLI's local model configuration. If an older Codex CLI cannot use its configured model, either update it with `codex update` or temporarily select a compatible model for Loopit:
 
 ```bash
-LOOPIT_CODEX_MODEL=gpt-5.5 npm run dev
+cd /path/to/your-project
+LOOPIT_CODEX_MODEL=gpt-5.5 loopit
 ```
 
 The seed proposal intentionally uses one small repair cycle—**Validate the loop → Revise durable state → Validate the loop**—plus explicit human-interrupt and completion exits. It is a construction loop for dogfooding Loopit itself, not a claim that every domain needs the same states.

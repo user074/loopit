@@ -98,9 +98,52 @@ button {
 }
 
 .connection-status {
-  gap: 7px;
+  gap: 9px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.connection-status > div {
+  display: grid;
+  gap: 1px;
+}
+
+.connection-status small {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.connection-status strong {
+  max-width: 240px;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-status > div > span {
+  display: block;
+  max-width: 300px;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-status i {
+  padding: 4px 7px;
+  border-radius: 6px;
+  background: var(--amber-soft);
+  color: #7b5213;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 800;
 }
 
 .status-dot {

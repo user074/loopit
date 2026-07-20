@@ -4,6 +4,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  realpath,
   rename,
   unlink,
   writeFile,
@@ -11,6 +12,7 @@ import {
 import http from "node:http";
 import path from "node:path";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import {
   appendConversationMarkdown,
   emptyConversationMarkdown,
@@ -23,7 +25,31 @@ import {
 } from "../lib/loop-markdown.mjs";
 
 const execFileAsync = promisify(execFile);
-const projectRoot = path.resolve(process.env.LOOPIT_PROJECT || process.cwd());
+const daemonAppRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
+const requestedAppRoot = path.resolve(
+  process.env.LOOPIT_APP_ROOT || daemonAppRoot,
+);
+const requestedProjectRoot = path.resolve(
+  process.env.LOOPIT_PROJECT || process.cwd(),
+);
+const appRoot = await realpath(requestedAppRoot).catch(() => requestedAppRoot);
+const projectRoot = await realpath(requestedProjectRoot).catch(
+  () => requestedProjectRoot,
+);
+function containsPath(parent, candidate) {
+  const relative = path.relative(parent, candidate);
+  return (
+    relative === "" ||
+    (!relative.startsWith(`..${path.sep}`) &&
+      relative !== ".." &&
+      !path.isAbsolute(relative))
+  );
+}
+const runtimeAllowed =
+  !containsPath(appRoot, projectRoot) && !containsPath(projectRoot, appRoot);
 const loopitDir = path.join(projectRoot, ".loopit");
 const loopPath = path.join(loopitDir, "loop.md");
 const sessionPath = path.join(loopitDir, "session.json");
@@ -1028,6 +1054,13 @@ ${report.trim()}
 }
 
 async function streamRuntime(request, response) {
+  if (!runtimeAllowed) {
+    json(response, 409, {
+      error:
+        "Runtime is disabled for the Loopit control-plane repository. Start Loopit from a separate target project.",
+    });
+    return;
+  }
   if (activeRun) {
     json(response, 409, { error: "Another local agent is already working." });
     return;
@@ -1224,7 +1257,13 @@ const server = http.createServer(async (request, response) => {
       ]);
       json(response, 200, {
         ok: true,
+        appRoot,
         projectRoot,
+        projectName: path.basename(projectRoot),
+        runtimeAllowed,
+        runtimeBlockedReason: runtimeAllowed
+          ? null
+          : "Choose a target repository that does not contain or sit inside the Loopit control-plane repository.",
         active: Boolean(activeRun),
         activePurpose: activeRun?.purpose ?? null,
         agents: { codex, claude },
