@@ -14,6 +14,11 @@ import type {
 import { primarySequence, stateHandoff } from "@/lib/loop-flow";
 import type { PrimarySequence } from "@/lib/loop-flow";
 import { validateLoop } from "@/lib/loop-validation";
+import {
+  extractHumanReview,
+  lastQuestion,
+  type HumanReviewRequest,
+} from "@/lib/human-review";
 
 const DAEMON_URL = "http://127.0.0.1:4318";
 const START_CONSTRUCTION =
@@ -79,8 +84,33 @@ interface WiringTestStep {
 }
 
 type WiringTestStatus = "idle" | "running" | "passed" | "failed";
-type TestResolutionStatus = "idle" | "working" | "finished";
+type TestPathTone = "pending" | "active" | "complete" | "action";
+type UnifiedTestStage =
+  | "idle"
+  | "tracing"
+  | "rehearsing"
+  | "repairing"
+  | "retesting"
+  | "passed"
+  | "needs-attention";
 type FlowZoom = 0 | 1 | 2;
+
+const ACTIVE_TEST_STAGES: UnifiedTestStage[] = [
+  "tracing",
+  "rehearsing",
+  "repairing",
+  "retesting",
+];
+
+const TEST_STAGE_LABEL: Record<UnifiedTestStage, string> = {
+  idle: "Not tested",
+  tracing: "Checking flow",
+  rehearsing: "Testing",
+  repairing: "Fixing",
+  retesting: "Retesting",
+  passed: "Passed",
+  "needs-attention": "Needs input",
+};
 
 const FLOW_ZOOM_LABEL: Record<FlowZoom, string> = {
   0: "Overview",
@@ -217,6 +247,59 @@ function compactContent(content: string, index: number) {
     label: hypothesis?.[2] || label,
     detail: detail === label ? "" : detail,
   };
+}
+
+function summarizeLoopChanges(
+  before: LoopDefinition,
+  after: LoopDefinition,
+) {
+  const changes: string[] = [];
+  if (before.name !== after.name || before.objective !== after.objective) {
+    changes.push("Updated the loop objective");
+  }
+  if (before.startState !== after.startState) {
+    changes.push("Updated where the cycle begins");
+  }
+  const beforeStarting = new Map(
+    before.startingPackage.map((item) => [item.role, item]),
+  );
+
+  after.startingPackage.forEach((item) => {
+    const previous = beforeStarting.get(item.role);
+    if (JSON.stringify(previous) === JSON.stringify(item)) return;
+    changes.push(
+      item.role === "foundation"
+        ? `Updated setup: ${item.name}`
+        : `Updated starting work: ${item.name}`,
+    );
+  });
+
+  const beforeStates = new Map(before.states.map((state) => [state.id, state]));
+  const afterStateIds = new Set(after.states.map((state) => state.id));
+  after.states.forEach((state) => {
+    const previous = beforeStates.get(state.id);
+    if (!previous) changes.push(`Added cycle step: ${state.name}`);
+    else if (JSON.stringify(previous) !== JSON.stringify(state)) {
+      changes.push(`Updated cycle step: ${state.name}`);
+    }
+  });
+  before.states.forEach((state) => {
+    if (!afterStateIds.has(state.id)) changes.push(`Removed cycle step: ${state.name}`);
+  });
+
+  if (JSON.stringify(before.artifacts) !== JSON.stringify(after.artifacts)) {
+    changes.push("Updated handoff definitions");
+  }
+  if (JSON.stringify(before.boundaries) !== JSON.stringify(after.boundaries)) {
+    changes.push("Updated pause or stopping rules");
+  }
+  if (before.completionPolicy !== after.completionPolicy) {
+    changes.push("Updated the completion policy");
+  }
+
+  return changes.length
+    ? changes
+    : ["No automatic loop changes were needed"];
 }
 
 function handoffSummary(items: string[]) {
@@ -1223,10 +1306,19 @@ export function LoopStudio({
   const [isAgentTesting, setIsAgentTesting] = useState(false);
   const [agentTestActivity, setAgentTestActivity] = useState("Ready");
   const [agentTest, setAgentTest] = useState<AgentTestResult | null>(null);
-  const [testResolutionStatus, setTestResolutionStatus] =
-    useState<TestResolutionStatus>("idle");
+  const [unifiedTestStage, setUnifiedTestStage] =
+    useState<UnifiedTestStage>("idle");
+  const [testAudit, setTestAudit] = useState<string[]>([]);
+  const [humanReview, setHumanReview] =
+    useState<HumanReviewRequest | null>(null);
+  const [dismissedHumanReviewKey, setDismissedHumanReviewKey] =
+    useState<string | null>(null);
+  const [humanReviewInput, setHumanReviewInput] = useState("");
+  const [isHumanReviewSubmitting, setIsHumanReviewSubmitting] = useState(false);
+  const [humanReviewError, setHumanReviewError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wiringTestRunRef = useRef(0);
+  const unifiedTestRunRef = useRef(0);
 
   const sequence = useMemo(
     () => (loop ? primarySequence(loop) : null),
@@ -1234,10 +1326,17 @@ export function LoopStudio({
   );
   const findings = useMemo(() => (loop ? validateLoop(loop) : []), [loop]);
   const blockingFindings = findings.filter((item) => item.severity === "error");
+  const isUnifiedTestRunning = ACTIVE_TEST_STAGES.includes(unifiedTestStage);
   const conversationList = conversations ?? [];
   const activeConversation = conversationList.find(
     (conversation) => conversation.id === activeConversationId,
   );
+  const latestAgentMessage = [...messages]
+    .reverse()
+    .find(
+      (message) =>
+        message.role === "agent" && Boolean(lastQuestion(message.text)),
+    )?.text ?? null;
 
   const applyConversationPayload = useCallback(
     (payload: ConversationPayload) => {
@@ -1316,6 +1415,35 @@ export function LoopStudio({
     );
   }, [loop, sequence]);
 
+  useEffect(() => {
+    if (
+      !loop ||
+      !agentTest ||
+      agentTest.loopRevision !== loop.revision ||
+      agentTest.verdict === "pass" ||
+      humanReview ||
+      ACTIVE_TEST_STAGES.includes(unifiedTestStage)
+    ) {
+      return;
+    }
+    const request = extractHumanReview(
+      agentTest.report,
+      latestAgentMessage,
+      loop.revision,
+    );
+    if (!request || request.key === dismissedHumanReviewKey) return;
+    setHumanReview(request);
+    setHumanReviewInput("");
+    setHumanReviewError(null);
+  }, [
+    agentTest,
+    dismissedHumanReviewKey,
+    humanReview,
+    latestAgentMessage,
+    loop,
+    unifiedTestStage,
+  ]);
+
   const rememberUiMessage = (role: "loopit" | "error", text: string) => {
     void fetch(`${DAEMON_URL}/api/conversation`, {
       method: "POST",
@@ -1392,9 +1520,9 @@ export function LoopStudio({
     textOverride?: string,
     displayText?: string,
     allowDuringTest = false,
-  ) => {
+  ): Promise<string | null> => {
     const text = (textOverride ?? input).trim();
-    if (!text || isWorking || (isAgentTesting && !allowDuringTest)) return;
+    if (!text || isWorking || (isAgentTesting && !allowDuringTest)) return null;
 
     const selectedAgent = health?.agents[agent];
     if (selectedAgent && !selectedAgent.installed) {
@@ -1402,7 +1530,7 @@ export function LoopStudio({
         ...current,
         newMessage("error", `${agent} is not installed on this machine.`),
       ]);
-      return;
+      return null;
     }
 
     setMessages((current) => [
@@ -1412,6 +1540,7 @@ export function LoopStudio({
     setInput("");
     setIsWorking(true);
     setActivity(`Starting ${agent === "codex" ? "Codex" : "Claude"}`);
+    let finalAgentText: string | null = null;
 
     try {
       const response = await fetch(`${DAEMON_URL}/api/chat`, {
@@ -1452,6 +1581,7 @@ export function LoopStudio({
             setActivity(event.text);
           }
           if (event.type === "agent_message") {
+            finalAgentText = event.text;
             setMessages((current) => [
               ...current,
               newMessage("agent", event.text, agent),
@@ -1494,6 +1624,7 @@ export function LoopStudio({
       setIsWorking(false);
       void refresh();
     }
+    return finalAgentText;
   };
 
   const persistLoop = async (
@@ -1641,43 +1772,189 @@ export function LoopStudio({
   const expectedTransitionCount =
     loop?.states.reduce((total, state) => total + state.transitions.length, 0) ?? 0;
   const currentWiringStep = wiringTestSteps[wiringTestIndex] ?? null;
+  const currentAgentTest =
+    agentTest && agentTest.loopRevision === loop?.revision ? agentTest : null;
+  const currentStructurePasses =
+    Boolean(sequence?.loopBack) &&
+    blockingFindings.length === 0 &&
+    wiringTestSteps.length === expectedTransitionCount;
+  const pendingHumanReview =
+    currentAgentTest && currentAgentTest.verdict !== "pass" && loop
+      ? extractHumanReview(
+          currentAgentTest.report,
+          latestAgentMessage,
+          loop.revision,
+        )
+      : null;
+  const testPassed =
+    currentAgentTest?.verdict === "pass" && currentStructurePasses;
+  const testPanelLabel = isUnifiedTestRunning
+    ? TEST_STAGE_LABEL[unifiedTestStage]
+    : testPassed
+      ? "Passed"
+      : pendingHumanReview || currentAgentTest?.verdict === "risk"
+        ? "Needs input"
+        : currentAgentTest?.verdict === "fail"
+          ? "Needs repair"
+          : unifiedTestStage === "needs-attention"
+            ? "Needs input"
+            : "Not tested";
+  const testPanelTone =
+    testPanelLabel === "Passed"
+      ? "passed"
+      : testPanelLabel === "Not tested"
+        ? "idle"
+        : isUnifiedTestRunning
+          ? "running"
+          : "failed";
+  const traceTone: TestPathTone =
+    unifiedTestStage === "tracing" || wiringTestStatus === "running"
+      ? "active"
+      : wiringTestStatus === "passed" ||
+          (currentAgentTest && currentStructurePasses)
+        ? "complete"
+        : wiringTestStatus === "failed" ||
+            (currentAgentTest && !currentStructurePasses)
+          ? "action"
+          : "pending";
+  const rehearsalTone: TestPathTone =
+    unifiedTestStage === "rehearsing" ||
+    (unifiedTestStage === "retesting" && isAgentTesting)
+      ? "active"
+      : currentAgentTest?.verdict === "pass"
+        ? "complete"
+        : currentAgentTest
+          ? "action"
+          : "pending";
+  const resolutionTone: TestPathTone = testPassed
+    ? "complete"
+    : unifiedTestStage === "repairing" || unifiedTestStage === "retesting"
+      ? "active"
+      : currentAgentTest || unifiedTestStage === "needs-attention"
+        ? "action"
+        : "pending";
+  const testPathSteps: Array<{
+    label: string;
+    detail: string;
+    tone: TestPathTone;
+  }> = [
+    {
+      label: "Trace every path",
+      detail:
+        traceTone === "active"
+          ? "Checking every transition"
+          : traceTone === "complete"
+            ? `${expectedTransitionCount} transitions close the cycle`
+            : traceTone === "action"
+              ? "Control flow must be repaired"
+              : "Check every transition and loop-back",
+      tone: traceTone,
+    },
+    {
+      label: "Test with a fresh agent",
+      detail:
+        rehearsalTone === "active"
+          ? agentTestActivity
+          : rehearsalTone === "complete"
+            ? "A fresh agent can continue from the files"
+            : rehearsalTone === "action"
+              ? "The rehearsal found issues to resolve"
+              : "Challenge handoffs and edge cases",
+      tone: rehearsalTone,
+    },
+    {
+      label: "Fix or ask you",
+      detail:
+        resolutionTone === "active"
+          ? "Repairing, then testing again"
+          : resolutionTone === "complete"
+            ? "No unresolved construction issues"
+            : pendingHumanReview
+              ? "One human decision remains"
+              : currentAgentTest
+                ? "Continue automatic repair"
+                : "Repair findings or request one decision",
+      tone: resolutionTone,
+    },
+    {
+      label: "Passed",
+      detail: testPassed
+        ? `Revision ${loop?.revision} is ready for sandbox use`
+        : "Reached after all earlier checks pass",
+      tone: testPassed ? "complete" : "pending",
+    },
+  ];
 
-  const runWiringTest = async () => {
-    if (!loop || !sequence || wiringTestStatus === "running") return;
+  const runWiringTest = async (
+    targetLoop: LoopDefinition = loop!,
+    recordConversation = true,
+  ): Promise<boolean> => {
+    if (!targetLoop || wiringTestStatus === "running") return false;
+    const targetSequence = primarySequence(targetLoop);
+    const targetFindings = validateLoop(targetLoop);
+    const targetOtherTransitions = targetLoop.states.flatMap((state) =>
+      state.transitions
+        .filter(
+          (transition) =>
+            !targetSequence.chosenTransitionIds.has(transition.id),
+        )
+        .map((transition) => ({ state, transition })),
+    );
+    const targetSteps: WiringTestStep[] = [
+      ...targetSequence.links.map((link) => ({
+        ...link,
+        lane: "usual" as const,
+      })),
+      ...(targetSequence.loopBack
+        ? [{ ...targetSequence.loopBack, lane: "repeat" as const }]
+        : []),
+      ...targetOtherTransitions.map(({ state, transition }) => ({
+        sourceId: state.id,
+        targetId: transition.to,
+        transition,
+        lane: "edge" as const,
+      })),
+    ];
+    const targetTransitionCount = targetLoop.states.reduce(
+      (total, state) => total + state.transitions.length,
+      0,
+    );
     const runId = wiringTestRunRef.current + 1;
     wiringTestRunRef.current = runId;
     setWiringTestStatus("running");
     setWiringTestIndex(-1);
     setTestedTransitionIds([]);
 
-    for (let index = 0; index < wiringTestSteps.length; index += 1) {
-      if (wiringTestRunRef.current !== runId) return;
+    for (let index = 0; index < targetSteps.length; index += 1) {
+      if (wiringTestRunRef.current !== runId) return false;
       setWiringTestIndex(index);
       await new Promise((resolve) => window.setTimeout(resolve, 480));
-      if (wiringTestRunRef.current !== runId) return;
+      if (wiringTestRunRef.current !== runId) return false;
       setTestedTransitionIds((current) => [
         ...current,
-        wiringTestSteps[index].transition.id,
+        targetSteps[index].transition.id,
       ]);
     }
 
     setWiringTestIndex(-1);
     const passed =
-      Boolean(sequence.loopBack) &&
-      blockingFindings.length === 0 &&
-      wiringTestSteps.length === expectedTransitionCount;
+      Boolean(targetSequence.loopBack) &&
+      targetFindings.every((finding) => finding.severity !== "error") &&
+      targetSteps.length === targetTransitionCount;
     setWiringTestStatus(passed ? "passed" : "failed");
 
     const summary = passed
-      ? `Quick wiring test passed for loop revision ${loop.revision}: the recurrence closed and all ${expectedTransitionCount} declared transitions were traced.`
-      : `Quick wiring test found a problem in loop revision ${loop.revision}. The loop did not close cleanly or not every declared transition could be traced.`;
-    setMessages((current) => [...current, newMessage("loopit", summary)]);
-    rememberUiMessage("loopit", summary);
+      ? `Quick wiring test passed for loop revision ${targetLoop.revision}: the recurrence closed and all ${targetTransitionCount} declared transitions were traced.`
+      : `Quick wiring test found a problem in loop revision ${targetLoop.revision}. The loop did not close cleanly or not every declared transition could be traced.`;
+    if (recordConversation) {
+      setMessages((current) => [...current, newMessage("loopit", summary)]);
+      rememberUiMessage("loopit", summary);
+    }
+    return passed;
   };
 
-  const runAgentTest = async () => {
-    if (!loop || isWorking || isAgentTesting) return;
-    setTestResolutionStatus("idle");
+  const runAgentRehearsal = async (): Promise<AgentTestResult | null> => {
+    if (!loop || isWorking || isAgentTesting) return null;
     setIsAgentTesting(true);
     setAgentTestActivity(
       `Starting a fresh, read-only ${agent === "codex" ? "Codex" : "Claude"} rehearsal`,
@@ -1730,29 +2007,233 @@ export function LoopStudio({
         }
       }
 
-      if (resultForResolution && resultForResolution.verdict !== "pass") {
-        setIsAgentTesting(false);
-        setTestResolutionStatus("working");
-        setAgentTestActivity(
-          "Resolving agent-owned gaps; human-owned gaps will become one question",
-        );
-        await new Promise((resolve) => window.setTimeout(resolve, 0));
-        await sendMessage(
-          RESOLVE_TEST_FAILURE,
-          "Continue from the failed preflight",
-          true,
-        );
-        setTestResolutionStatus("finished");
-      }
+      return resultForResolution;
     } catch (error) {
       const text =
         error instanceof Error ? error.message : "The agent rehearsal failed.";
       setMessages((current) => [...current, newMessage("error", text)]);
       rememberUiMessage("error", text);
       setAgentTestActivity("Rehearsal unavailable");
+      return null;
     } finally {
       setIsAgentTesting(false);
       void refresh();
+    }
+  };
+
+  const stopUnifiedTest = async () => {
+    unifiedTestRunRef.current += 1;
+    wiringTestRunRef.current += 1;
+    setWiringTestStatus("idle");
+    setWiringTestIndex(-1);
+    await interrupt();
+    setUnifiedTestStage("needs-attention");
+  };
+
+  const runUnifiedTest = async (
+    startingLoop: LoopDefinition | null = loop,
+  ) => {
+    if (!startingLoop || isWorking || isAgentTesting || isUnifiedTestRunning) return;
+    const runId = unifiedTestRunRef.current + 1;
+    unifiedTestRunRef.current = runId;
+    const appendAudit = (...items: string[]) =>
+      setTestAudit((current) => [...current, ...items]);
+
+    setTestAudit([]);
+    setHumanReview(null);
+    setAgentTest(null);
+    setUnifiedTestStage("tracing");
+
+    try {
+      let testedLoop = startingLoop;
+      let tracePassed = await runWiringTest(testedLoop, false);
+      if (unifiedTestRunRef.current !== runId) return;
+      appendAudit(
+        tracePassed
+          ? `Revision ${testedLoop.revision}: every declared transition was traced and the cycle closes.`
+          : `Revision ${testedLoop.revision}: the control-flow trace found a structural problem.`,
+      );
+
+      setUnifiedTestStage("rehearsing");
+      let result = await runAgentRehearsal();
+      if (unifiedTestRunRef.current !== runId) return;
+      if (!result) {
+        appendAudit("The fresh-agent rehearsal did not produce a report.");
+        setUnifiedTestStage("needs-attention");
+        return;
+      }
+      appendAudit(
+        `Revision ${testedLoop.revision}: fresh-agent rehearsal returned ${result.verdict.toUpperCase()}.`,
+      );
+
+      if (tracePassed && result.verdict === "pass") {
+        setUnifiedTestStage("passed");
+        return;
+      }
+
+      let lastRepairResponse: string | null = latestAgentMessage;
+      for (let repairRound = 1; repairRound <= 2; repairRound += 1) {
+        setUnifiedTestStage("repairing");
+        const repairPrompt =
+          result.verdict === "pass" && !tracePassed
+            ? `${RESOLVE_TEST_FAILURE}\n\nThe deterministic control-flow trace also failed for revision ${testedLoop.revision}. Inspect the declared graph and validation findings even though the rehearsal report passed, and repair the smallest agent-owned structural problem.`
+            : RESOLVE_TEST_FAILURE;
+        lastRepairResponse = await sendMessage(
+          repairPrompt,
+          repairRound === 1
+            ? "Fix issues found by the loop test"
+            : "Continue fixing the loop test",
+          true,
+        );
+        if (unifiedTestRunRef.current !== runId) return;
+
+        const loopResponse = await fetch(`${DAEMON_URL}/api/loop`);
+        if (!loopResponse.ok) {
+          throw new Error("The repaired loop could not be loaded.");
+        }
+        const payload = (await loopResponse.json()) as {
+          loop: LoopDefinition | null;
+        };
+        const repairedLoop = payload.loop;
+        if (!repairedLoop) throw new Error("The repair removed the loop.");
+
+        if (repairedLoop.revision === testedLoop.revision) {
+          appendAudit(
+            "No automatic change was made; the remaining issue needs human input or runtime evidence.",
+          );
+          const review = extractHumanReview(
+            result.report,
+            lastRepairResponse,
+            testedLoop.revision,
+          );
+          if (review) {
+            setHumanReview(review);
+            setHumanReviewInput("");
+            setHumanReviewError(null);
+          }
+          setUnifiedTestStage("needs-attention");
+          return;
+        }
+
+        appendAudit(
+          `Automatic repair created revision ${repairedLoop.revision}.`,
+          ...summarizeLoopChanges(testedLoop, repairedLoop),
+        );
+        testedLoop = repairedLoop;
+        setLoop(repairedLoop);
+        setParseError(null);
+        await new Promise<void>((resolve) =>
+          window.requestAnimationFrame(() => resolve()),
+        );
+        if (unifiedTestRunRef.current !== runId) return;
+
+        setUnifiedTestStage("retesting");
+        tracePassed = await runWiringTest(testedLoop, false);
+        if (unifiedTestRunRef.current !== runId) return;
+        appendAudit(
+          tracePassed
+            ? `Revision ${testedLoop.revision}: repaired control flow passes.`
+            : `Revision ${testedLoop.revision}: control flow still needs repair.`,
+        );
+
+        result = await runAgentRehearsal();
+        if (unifiedTestRunRef.current !== runId) return;
+        if (!result) {
+          appendAudit("The retest did not produce a report.");
+          setUnifiedTestStage("needs-attention");
+          return;
+        }
+        appendAudit(
+          `Revision ${testedLoop.revision}: fresh-agent retest returned ${result.verdict.toUpperCase()}.`,
+        );
+
+        if (tracePassed && result.verdict === "pass") {
+          setUnifiedTestStage("passed");
+          return;
+        }
+      }
+
+      appendAudit(
+        "Automatic repair stopped after two rounds to avoid an uncontrolled repair loop.",
+      );
+      const review = extractHumanReview(
+        result.report,
+        lastRepairResponse,
+        testedLoop.revision,
+      );
+      if (review) {
+        setHumanReview(review);
+        setHumanReviewInput("");
+        setHumanReviewError(null);
+      }
+      setUnifiedTestStage("needs-attention");
+    } catch (error) {
+      appendAudit(
+        error instanceof Error ? error.message : "The loop test could not finish.",
+      );
+      setUnifiedTestStage("needs-attention");
+    }
+  };
+
+  const dismissHumanReview = () => {
+    if (!humanReview) return;
+    setDismissedHumanReviewKey(humanReview.key);
+    setHumanReview(null);
+    setHumanReviewInput("");
+    setHumanReviewError(null);
+  };
+
+  const openHumanReview = () => {
+    if (!pendingHumanReview) return;
+    setDismissedHumanReviewKey(null);
+    setHumanReview(pendingHumanReview);
+    setHumanReviewInput("");
+    setHumanReviewError(null);
+  };
+
+  const submitHumanReview = async (decision: string) => {
+    const value = decision.trim();
+    if (!humanReview || !value || isHumanReviewSubmitting) return;
+    setIsHumanReviewSubmitting(true);
+    setHumanReviewError(null);
+    const reviewedRevision = humanReview.loopRevision;
+
+    try {
+      await sendMessage(
+        `The user has resolved the human review for loop revision ${reviewedRevision}. Their decision is: ${value}\n\nRecord this decision durably in .loopit/loop.md wherever it governs scope, authority, boundaries, setup, or transitions. Preserve unrelated intent, increment the revision, and explain the change concisely. Do not merely acknowledge it in chat.`,
+        `Decision: ${value}`,
+        true,
+      );
+      const response = await fetch(`${DAEMON_URL}/api/loop`);
+      if (!response.ok) throw new Error("The updated loop could not be loaded.");
+      const payload = (await response.json()) as {
+        loop: LoopDefinition | null;
+      };
+      const revisedLoop = payload.loop;
+      if (!revisedLoop || revisedLoop.revision === reviewedRevision) {
+        throw new Error(
+          "The decision was not recorded in the loop. Review the agent response and try again.",
+        );
+      }
+
+      setDismissedHumanReviewKey(humanReview.key);
+      setHumanReview(null);
+      setHumanReviewInput("");
+      setLoop(revisedLoop);
+      setParseError(null);
+      setIsHumanReviewSubmitting(false);
+      await new Promise<void>((resolve) =>
+        window.requestAnimationFrame(() => resolve()),
+      );
+      await runUnifiedTest(revisedLoop);
+    } catch (error) {
+      setHumanReviewError(
+        error instanceof Error
+          ? error.message
+          : "The decision could not be recorded.",
+      );
+    } finally {
+      setIsHumanReviewSubmitting(false);
     }
   };
 
@@ -1929,6 +2410,111 @@ export function LoopStudio({
         </aside>
 
         <section className="loop-panel" aria-label="Loop editor">
+          {humanReview && loop && (
+            <div className="human-review-overlay">
+              <section
+                aria-labelledby="human-review-title"
+                aria-modal="true"
+                className="human-review-dialog"
+                role="dialog"
+              >
+                <header>
+                  <div>
+                    <span className="eyebrow">Human review</span>
+                    <h2 id="human-review-title">Your decision is needed</h2>
+                  </div>
+                  <button
+                    aria-label="Review later"
+                    disabled={isHumanReviewSubmitting}
+                    onClick={dismissHumanReview}
+                    type="button"
+                  >
+                    ×
+                  </button>
+                </header>
+
+                <div className="human-review-question">
+                  <span>Decision</span>
+                  <strong>{humanReview.question}</strong>
+                </div>
+
+                <div className="human-review-recommendation">
+                  <span>Recommended next step</span>
+                  <p>{humanReview.recommendation}</p>
+                  <small>{humanReview.whyHuman}</small>
+                </div>
+
+                {humanReview.options.length > 0 && (
+                  <div className="human-review-options">
+                    <span>Choose an option</span>
+                    {humanReview.options.map((option) => (
+                      <button
+                        disabled={isHumanReviewSubmitting}
+                        key={option}
+                        onClick={() => void submitHumanReview(option)}
+                        type="button"
+                      >
+                        {option}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                <label className="human-review-custom">
+                  Or give your own direction
+                  <textarea
+                    disabled={isHumanReviewSubmitting}
+                    onChange={(event) => setHumanReviewInput(event.target.value)}
+                    placeholder="Explain the decision the agent should follow…"
+                    rows={3}
+                    value={humanReviewInput}
+                  />
+                </label>
+
+                {humanReviewError && (
+                  <p className="human-review-error">{humanReviewError}</p>
+                )}
+
+                <footer>
+                  <button
+                    className="button-secondary"
+                    disabled={isHumanReviewSubmitting}
+                    onClick={dismissHumanReview}
+                    type="button"
+                  >
+                    Review later
+                  </button>
+                  {humanReview.recommendedDecision && (
+                    <button
+                      className="button-secondary"
+                      disabled={isHumanReviewSubmitting}
+                      onClick={() =>
+                        void submitHumanReview(
+                          humanReview.recommendedDecision!,
+                        )
+                      }
+                      type="button"
+                    >
+                      Use recommendation
+                    </button>
+                  )}
+                  <button
+                    className="button-primary"
+                    disabled={
+                      isHumanReviewSubmitting || !humanReviewInput.trim()
+                    }
+                    onClick={() => void submitHumanReview(humanReviewInput)}
+                    type="button"
+                  >
+                    {isHumanReviewSubmitting
+                      ? "Recording decision…"
+                      : "Send decision"}
+                  </button>
+                </footer>
+              </section>
+            </div>
+          )}
+
           {!loop && !parseError && (
             <div className="empty-loop">
               <div className="empty-loop-mark" aria-hidden="true">
@@ -1984,6 +2570,7 @@ export function LoopStudio({
                   </div>
                   <button
                     className="button-secondary"
+                    disabled={isSaving || isWorking || isAgentTesting || isUnifiedTestRunning}
                     onClick={() => setEditing("overview")}
                     type="button"
                   >
@@ -2020,7 +2607,7 @@ export function LoopStudio({
 
               <section className="sequence-section">
                 <StartingWorkPanel
-                  disabled={isSaving || isWorking || isAgentTesting}
+                  disabled={isSaving || isWorking || isAgentTesting || isUnifiedTestRunning}
                   editing={editing === "starting-work"}
                   items={loop.startingPackage}
                   onCancel={() => setEditing(null)}
@@ -2051,7 +2638,7 @@ export function LoopStudio({
 
                 <StateFlowCanvas
                   currentWiringStep={currentWiringStep}
-                  disabled={isSaving || isWorking || isAgentTesting}
+                  disabled={isSaving || isWorking || isAgentTesting || isUnifiedTestRunning}
                   editing={editing}
                   focusedStateId={focusedFlowStateId}
                   loop={loop}
@@ -2073,7 +2660,7 @@ export function LoopStudio({
                 />
 
                 <SetupPanel
-                  disabled={isSaving || isWorking || isAgentTesting}
+                  disabled={isSaving || isWorking || isAgentTesting || isUnifiedTestRunning}
                   editing={editing === "setup"}
                   items={loop.startingPackage}
                   onCancel={() => setEditing(null)}
@@ -2102,69 +2689,124 @@ export function LoopStudio({
                   zoom={flowZoom}
                 />
 
-                <details className={`test-lab flow-test-lab is-${wiringTestStatus}`}>
+                <details className={`test-lab flow-test-lab is-${testPanelTone}`}>
                   <summary>
                     <div>
                       <span className="eyebrow">Preflight</span>
                       <strong>Test this loop</strong>
                     </div>
-                    <span>
-                      {wiringTestStatus === "running"
-                        ? "Tracing"
-                        : wiringTestStatus === "passed"
-                          ? "Passed"
-                          : wiringTestStatus === "failed"
-                            ? "Needs repair"
-                            : isAgentTesting
-                              ? "Rehearsing"
-                              : "Not tested"}
-                    </span>
+                    <span>{testPanelLabel}</span>
                   </summary>
 
                   <div className="flow-test-content">
                     <div className="test-lab-heading">
                       <p>
-                        Trace the result handoffs in seconds, then ask a fresh local
-                        agent to consume them without conversation context.
+                        One path to a final result: check, repair or decide,
+                        retest, then pass the current revision.
                       </p>
                       <div className="test-lab-actions">
-                        <button
-                          className="button-secondary"
-                          disabled={
-                            wiringTestStatus === "running" ||
-                            isWorking ||
-                            isAgentTesting
-                          }
-                          onClick={() => void runWiringTest()}
-                          type="button"
-                        >
-                          {wiringTestStatus === "passed" ||
-                          wiringTestStatus === "failed"
-                            ? "Trace again"
-                            : "Trace handoffs"}
-                        </button>
-                        {isAgentTesting ? (
+                        {isUnifiedTestRunning ? (
                           <button
                             className="button-stop"
-                            onClick={interrupt}
+                            onClick={() => void stopUnifiedTest()}
                             type="button"
                           >
-                            Stop rehearsal
+                            Stop test
                           </button>
                         ) : (
                           <button
                             className="button-primary"
-                            disabled={
-                              isWorking || wiringTestStatus === "running"
+                            disabled={isWorking || isAgentTesting}
+                            onClick={() =>
+                              pendingHumanReview
+                                ? openHumanReview()
+                                : void runUnifiedTest()
                             }
-                            onClick={() => void runAgentTest()}
                             type="button"
                           >
-                            Test with {agent === "codex" ? "Codex" : "Claude"}
+                            {testPanelLabel === "Passed"
+                              ? "Test again"
+                              : pendingHumanReview
+                                ? "Review decision"
+                                : currentAgentTest
+                                  ? "Continue test"
+                                  : "Start test"}
                           </button>
                         )}
                       </div>
                     </div>
+
+                    <ol
+                      aria-label="Path to a passed loop test"
+                      className="test-path"
+                    >
+                      {testPathSteps.map((step, index) => (
+                        <li className={`is-${step.tone}`} key={step.label}>
+                          <span aria-hidden="true">
+                            {step.tone === "complete"
+                              ? "✓"
+                              : step.tone === "active"
+                                ? "…"
+                                : step.tone === "action"
+                                  ? "!"
+                                  : index + 1}
+                          </span>
+                          <div>
+                            <strong>{step.label}</strong>
+                            <small>{step.detail}</small>
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+
+                    {!isUnifiedTestRunning && testPassed && (
+                      <div className="test-completion is-passed">
+                        <span aria-hidden="true">✓</span>
+                        <div>
+                          <strong>Loop test passed</strong>
+                          <p>
+                            Revision {loop.revision} completed every construction
+                            check. It is ready for implementation in a sandbox.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {!isUnifiedTestRunning && !testPassed && pendingHumanReview && (
+                      <div className="test-completion is-blocked">
+                        <span aria-hidden="true">!</span>
+                        <div>
+                          <strong>One decision keeps this test from passing</strong>
+                          <p>
+                            Review the proposed choice; Loopit records it and
+                            resumes the test automatically.
+                          </p>
+                        </div>
+                        <button
+                          className="button-primary"
+                          onClick={openHumanReview}
+                          type="button"
+                        >
+                          Review decision
+                        </button>
+                      </div>
+                    )}
+
+                    {!isUnifiedTestRunning &&
+                      !testPassed &&
+                      currentAgentTest &&
+                      !pendingHumanReview && (
+                        <div className="test-completion is-blocked">
+                          <span aria-hidden="true">!</span>
+                          <div>
+                            <strong>The test is not finished yet</strong>
+                            <p>
+                              Continue the test to repair the remaining findings
+                              and run every check again.
+                            </p>
+                          </div>
+                        </div>
+                      )}
 
                     {wiringTestStatus === "running" && currentWiringStep && (
                       <div className="test-running">
@@ -2238,30 +2880,41 @@ export function LoopStudio({
                       </div>
                     )}
 
-                    {testResolutionStatus === "working" && (
+                    {unifiedTestStage === "repairing" && (
                       <div className="agent-test-running is-resolution">
                         <span className="pulse-dot" />
                         <div>
-                          <strong>Repairing the loop</strong>
+                          <strong>Fixing the loop</strong>
                           <p>
-                            Agent-owned gaps are being resolved. Missing human
-                            intent will become one question in chat.
+                            Agent-owned issues are being repaired before the
+                            next test.
                           </p>
                         </div>
                       </div>
                     )}
 
-                    {testResolutionStatus === "finished" && (
+                    {unifiedTestStage === "retesting" && !isAgentTesting && (
                       <div className="test-next-action">
                         <span aria-hidden="true">→</span>
                         <div>
-                          <strong>The next action was initiated</strong>
-                          <p>
-                            Retest the revision or answer the remaining question
-                            in chat.
-                          </p>
+                          <strong>Checking the repaired revision</strong>
+                          <p>The complete test is running again automatically.</p>
                         </div>
                       </div>
+                    )}
+
+                    {testAudit.length > 0 && !isUnifiedTestRunning && (
+                      <details className="test-audit">
+                        <summary>
+                          <strong>What was checked or changed</strong>
+                          <span>{testAudit.length} audit entries</span>
+                        </summary>
+                        <ol>
+                          {testAudit.map((entry, index) => (
+                            <li key={`${index}-${entry}`}>{entry}</li>
+                          ))}
+                        </ol>
+                      </details>
                     )}
 
                     {agentTest && !isAgentTesting && (

@@ -11,7 +11,7 @@
     "dev:daemon": "node scripts/loopit-daemon.mjs",
     "build": "next build",
     "start": "next start",
-    "test": "npm run build && node --test tests/*.test.mjs tests/loop-validation.test.ts",
+    "test": "npm run build && node --test tests/*.test.mjs tests/*.test.ts",
     "lint": "eslint app lib scripts tests next.config.ts"
   },
   "dependencies": {

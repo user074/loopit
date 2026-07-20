@@ -50,7 +50,7 @@ test("server-renders the Loopit construction studio", async () => {
   assert.match(html, /\+ New/);
   assert.match(html, /History/);
   assert.match(html, /No loop yet|How the work continues/);
-  assert.match(html, /Construct my first loop|Trace handoffs/);
+  assert.match(html, /Construct my first loop|Start test|Continue test|Review decision|Test again/);
   assert.doesNotMatch(html, /codex-preview/);
   assert.doesNotMatch(html, /Your site is taking shape/);
 });
@@ -95,6 +95,25 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.match(studio, /Instructions, evidence, and exit rules/);
   assert.match(studio, /flow-loop-return-arrow/);
   assert.match(studio, /Back to step/);
+  assert.match(studio, /runUnifiedTest/);
+  assert.match(studio, /One path to a final result/);
+  assert.match(studio, /What was checked or changed/);
+  assert.match(studio, /Path to a passed loop test/);
+  assert.match(studio, /Trace every path/);
+  assert.match(studio, /Test with a fresh agent/);
+  assert.match(studio, /Fix or ask you/);
+  assert.match(studio, /Loop test passed/);
+  assert.match(studio, /Continue test/);
+  assert.match(studio, /Automatic repair created revision/);
+  assert.match(studio, /extractHumanReview/);
+  assert.match(studio, /human-review-overlay/);
+  assert.match(studio, /Your decision is needed/);
+  assert.match(studio, /Recommended next step/);
+  assert.match(studio, /submitHumanReview/);
+  assert.match(studio, /Send decision/);
+  assert.match(studio, /await runUnifiedTest\(revisedLoop\)/);
+  assert.doesNotMatch(studio, />Trace handoffs</);
+  assert.doesNotMatch(studio, />Test with /);
   assert.match(
     studio,
     /<StartingWorkPanel[\s\S]*<StateFlowCanvas[\s\S]*<SetupPanel/,

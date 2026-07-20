@@ -71,3 +71,19 @@ test("rehearsal verifies that the starting package can actually begin", () => {
   assert.match(daemon, /Fail a loop that would require another user prompt merely to obtain its initial hypotheses/);
   assert.match(daemon, /pushing raw methodology, tool, infrastructure, or architecture selection onto a nonexpert/);
 });
+
+test("rehearsal turns human-owned gaps into a decision panel contract", () => {
+  assert.match(daemon, /make that subsection directly renderable as a decision panel/);
+  assert.match(daemon, /Question: one focused question the user can answer now/);
+  assert.match(daemon, /Recommendation: the safest useful default/);
+  assert.match(daemon, /Why human: the intent, authority, private fact, cost, or risk judgment/);
+  assert.match(daemon, /Do not hide a required human decision/);
+  assert.match(daemon, /open a human review with a recommended next step/);
+});
+
+test("construction testing has a reachable passed outcome", () => {
+  assert.match(daemon, /PASS completes "Test this loop" for the current revision/);
+  assert.match(daemon, /Missing runtime evidence alone is not a RISK/);
+  assert.match(daemon, /Runtime proof by itself does not lower PASS to RISK/);
+  assert.match(daemon, /missing proof path/);
+});

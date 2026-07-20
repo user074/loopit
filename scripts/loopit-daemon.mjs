@@ -470,7 +470,7 @@ Test whether the loop's control contract can continue safely:
 10. Test that completed, partial, failed, and blocked work all produce consumable domain results and reach integration without creating outcome-specific branch explosions.
 11. Start a hypothetical fresh agent at each handoff using only declared durable artifacts. Check whether it can identify the contract, deliverable, evidence, outcome, provenance, and next responsibility without the construction conversation.
 12. Evaluate setup, retries, interrupted-session recovery, human authority, budget, and completion as runtime policies separately. Do not require them to appear as ordinary domain states. Verify only that each policy has a durable resume or stop contract and cannot silently masquerade as successful work.
-13. Distinguish structural proof from untested production behavior. Do not pass a claim that requires artifacts or fixtures which do not exist.
+13. Distinguish construction proof from untested production behavior. A construction rehearsal may pass when the loop names a concrete later sandbox test, the evidence it must collect, and failure routing; do not pretend that later runtime behavior already passed. Missing runtime evidence alone is not a RISK when that proof path is explicit.
 14. For completion, verify that integration creates only a candidate and the declared runtime policy performs any required challenge or human acceptance. A challenge does not need to be a permanent graph state.
 
 A non-PASS verdict is not a terminal outcome. It means the finding becomes the next construction action: agent-owned gaps should be repaired, human-owned gaps should become one focused question, and runtime-evidence gaps should become an explicit test action with failure routing.
@@ -488,7 +488,18 @@ Then use these headings:
 ## Ownership and next action
 ## What this test does not prove
 
-Name exact state IDs and transition IDs. PASS means the loop is resumable and every challenged case has an explicit route. RISK means the wiring works but human input or runtime evidence is still required. FAIL means agent-resolvable control flow has a dead end, missing recurrence, or unusable transition. For RISK or FAIL, the Ownership and next action section must separate "Agent resolves now", "Ask human", and "Sandbox must prove" items, using "None" where a category is empty.`;
+Name exact state IDs and transition IDs. PASS completes "Test this loop" for the current revision: the loop is resumable, every challenged case has an explicit route, no construction decision remains, and any later runtime proof has a concrete test and failure route. RISK means the construction contract is coherent but unresolved human intent, authority, private information, cost, or risk judgment prevents it from being final. Runtime proof by itself does not lower PASS to RISK when its later test path is explicit. FAIL means agent-resolvable control flow has a dead end, missing recurrence, unusable transition, or missing proof path. For RISK or FAIL, the Ownership and next action section must contain these exact H3 subsections: "Agent resolves now", "Ask human", and "Sandbox must prove", using "None" where a category is empty.
+
+When Ask human is not None, make that subsection directly renderable as a decision panel using exactly this structure:
+### Ask human
+Question: one focused question the user can answer now
+Recommendation: the safest useful default and why it is preferred
+Why human: the intent, authority, private fact, cost, or risk judgment the agent cannot own
+Options:
+- the recommended concrete option, matching the Recommendation
+- one concrete alternative
+
+Do not hide a required human decision in another section or in conversational prose. When Ask human is None, write only "### Ask human" followed by "None."`;
 }
 
 function rehearsalVerdict(report) {
@@ -864,7 +875,9 @@ ${report.trim()}
         send({ type: "test_report", result });
         await rememberConversation({
           role: "loopit",
-          text: `${agent === "codex" ? "Codex" : "Claude"} completed a fresh-session loop rehearsal for revision ${loop.revision}: ${verdict === "pass" ? "PASS" : "NEXT ACTION REQUIRED"}. The full Markdown report is available in the test panel.`,
+          text: verdict === "pass"
+            ? `Loop test passed for revision ${loop.revision}.`
+            : `Loop test found issues in revision ${loop.revision}. Loopit will repair agent-owned issues automatically or open a human review with a recommended next step.`,
         });
       } catch (error) {
         const text =
