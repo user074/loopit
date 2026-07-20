@@ -12,6 +12,24 @@ const STARTING_PACKAGE_ROLES = [
   "first-work",
 ] as const;
 
+const UNFAMILIAR_VISIBLE_TERMS = [
+  "evidence-backed state",
+  "initial frontier",
+  "working foundation",
+  "first work item",
+  "select work",
+  "execute work",
+  "integrate result",
+  "work contract",
+  "result package",
+  "updated state",
+  "frame the next",
+  "capability evidence map",
+  "product review disposition",
+  "feature result",
+  "frontier replenishment",
+];
+
 function finding(
   id: string,
   severity: ValidationFinding["severity"],
@@ -149,6 +167,34 @@ export function validateLoop(loop: LoopDefinition): ValidationFinding[] {
         "pass",
         "A complete starting package is proposed",
         "The loop begins with an evidence-backed state model, objective-grounded frontier, working foundation, and first executable work item.",
+      ),
+    );
+  }
+
+  const genericVisibleElements = [
+    ...startingPackage.map((item) => ({ id: item.id, name: item.name })),
+    ...loop.states.map((state) => ({ id: state.id, name: state.name })),
+    ...loop.artifacts.map((artifact) => ({
+      id: artifact.id,
+      name: artifact.name,
+    })),
+    ...loop.boundaries.map((boundary) => ({
+      id: boundary.id,
+      name: boundary.name,
+    })),
+  ].filter((item) =>
+    UNFAMILIAR_VISIBLE_TERMS.some((term) =>
+      item.name.trim().toLowerCase().includes(term),
+    ),
+  );
+  if (genericVisibleElements.length) {
+    findings.push(
+      finding(
+        "generic-visible-language",
+        "warning",
+        "Use familiar professional language",
+        `Replace generic or invented labels with established terms a practitioner already uses: ${genericVisibleElements.map((item) => item.name).join(", ")}.`,
+        genericVisibleElements[0].id,
       ),
     );
   }
@@ -461,7 +507,7 @@ export function validateLoop(loop: LoopDefinition): ValidationFinding[] {
   if (completionNeedsAcceptance && challengeStates.length === 0) {
     for (const { state, transition } of completeTransitions) {
       const condition = transition.when.toLowerCase();
-      if (!condition.includes("challeng")) {
+      if (!/challeng|independent (?:review|audit)|release review/.test(condition)) {
         findings.push(
           finding(
             `completion-policy-missing-challenge-${transition.id}`,

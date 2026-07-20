@@ -83,15 +83,15 @@ type TestResolutionStatus = "idle" | "working" | "finished";
 type FlowZoom = 0 | 1 | 2;
 
 const FLOW_ZOOM_LABEL: Record<FlowZoom, string> = {
-  0: "Loop",
+  0: "Overview",
   1: "Handoffs",
-  2: "Details",
+  2: "Rules",
 };
 
 const FLOW_ZOOM_DESCRIPTION: Record<FlowZoom, string> = {
-  0: "Project stages only",
-  1: "Stage summaries and named handoffs",
-  2: "Full instructions, evidence, and exit rules",
+  0: "The work cycle in project language",
+  1: "What each step produces for the next",
+  2: "Instructions, evidence, and exit rules",
 };
 
 const STATE_KIND_LABEL: Record<StateKind, string> = {
@@ -134,11 +134,11 @@ const STARTING_PACKAGE_ORDER: StartingPackageRole[] = [
   "first-work",
 ];
 
-const STARTING_PACKAGE_ROLE_LABEL: Record<StartingPackageRole, string> = {
-  state: "Evidence-backed state",
-  frontier: "Initial frontier",
-  foundation: "Working foundation",
-  "first-work": "First work item",
+const STARTING_PACKAGE_EDIT_PROMPT: Record<StartingPackageRole, string> = {
+  state: "What is already known",
+  frontier: "What remains to pursue",
+  foundation: "What is ready to use",
+  "first-work": "What to do first",
 };
 
 function newMessage(
@@ -292,9 +292,9 @@ function StartingPackageEditor({
     <div className="inline-editor starting-package-editor">
       {ordered.map((item) => (
         <section key={item.role}>
-          <span>{STARTING_PACKAGE_ROLE_LABEL[item.role]}</span>
+          <span>{STARTING_PACKAGE_EDIT_PROMPT[item.role]}</span>
           <label>
-            Domain-specific name
+            Name people in this field would use
             <input
               onChange={(event) =>
                 updateItem(item.role, { name: event.target.value })
@@ -303,7 +303,7 @@ function StartingPackageEditor({
             />
           </label>
           <label>
-            Purpose
+            What this contains
             <textarea
               onChange={(event) =>
                 updateItem(item.role, { description: event.target.value })
@@ -313,7 +313,7 @@ function StartingPackageEditor({
             />
           </label>
           <label>
-            Proposed initial contents
+            Initial items, one per line
             <textarea
               onChange={(event) =>
                 updateItem(item.role, {
@@ -336,7 +336,7 @@ function StartingPackageEditor({
           onClick={() => onSave(ordered)}
           type="button"
         >
-          Save starting package
+          Save starting point
         </button>
       </div>
     </div>
@@ -367,14 +367,15 @@ function StartingPackagePanel({
     safeItems.find((item) => item.role === role),
   ).filter(Boolean) as StartingPackageItem[];
   const isComplete = ordered.length === STARTING_PACKAGE_ORDER.length;
+  const firstWork = ordered.find((item) => item.role === "first-work");
 
   return (
     <section className={`starting-package starting-package-level-${zoom}`}>
       <div className="starting-package-heading">
         <div>
-          <span className="eyebrow">Before the loop starts</span>
-          <h3>Starting package</h3>
-          <p>The agent proposes this from the objective and work function.</p>
+          <span className="eyebrow">Before the cycle</span>
+          <h3>Starting point</h3>
+          <p>The initial materials and first task proposed for this project.</p>
         </div>
         {!editing && (
           <button
@@ -383,7 +384,7 @@ function StartingPackagePanel({
             onClick={isComplete ? onEdit : onPropose}
             type="button"
           >
-            {isComplete ? "Edit starting package" : "Ask agent to propose it"}
+            {isComplete ? "Edit starting point" : "Ask agent to propose it"}
           </button>
         )}
       </div>
@@ -399,8 +400,11 @@ function StartingPackagePanel({
         <>
           <div className="starting-package-grid">
             {ordered.map((item) => (
-              <article key={item.role}>
-                <span>{STARTING_PACKAGE_ROLE_LABEL[item.role]}</span>
+              <article
+                aria-label={STARTING_PACKAGE_EDIT_PROMPT[item.role]}
+                className={item.role === "first-work" ? "is-first-work" : ""}
+                key={item.role}
+              >
                 <strong>{item.name}</strong>
                 {zoom > 0 && <p>{item.description}</p>}
                 {zoom === 2 && (
@@ -415,12 +419,12 @@ function StartingPackagePanel({
           </div>
           <div className="starting-package-to-loop">
             <span aria-hidden="true">↓</span>
-            <strong>First work enters step 1</strong>
+            <strong>Start the cycle with {firstWork?.name}</strong>
           </div>
         </>
       ) : (
         <div className="starting-package-missing">
-          The agent has not proposed all four starting components yet.
+          The agent has not proposed a complete starting point yet.
         </div>
       )}
     </section>
@@ -715,21 +719,11 @@ function StateFlowCanvas({
     return target ? stateHandoff(source, target) : [];
   };
 
-  const handoffRole = (source: LoopState) => {
-    if (source.kind === "decide") return "Work contract";
-    if (source.kind === "act") return "Result package";
-    if (source.kind === "evaluate" || source.kind === "update") {
-      return "Integrated state";
-    }
-    return "Handoff";
-  };
-
   return (
     <>
       <div className="flow-toolbar">
         <div>
-          <span className="eyebrow">Recurring project loop</span>
-          <h3>{loop.name}</h3>
+          <h3>How the work continues</h3>
           <p>{FLOW_ZOOM_DESCRIPTION[zoom]}</p>
         </div>
         <div className="flow-zoom" aria-label="Change flow detail level">
@@ -785,13 +779,12 @@ function StateFlowCanvas({
                   >
                     <span className="flow-state-number">{index + 1}</span>
                     <span className="flow-state-copy">
-                      {zoom > 0 && <small>{STATE_KIND_LABEL[state.kind]}</small>}
                       <strong>{state.name}</strong>
                       {zoom > 0 && <em>{state.summary}</em>}
                     </span>
                     {isCycleStart && (
                       <span className="flow-state-tag">
-                        Loop starts
+                        Repeat from here
                       </span>
                     )}
                   </button>
@@ -805,7 +798,6 @@ function StateFlowCanvas({
                     {zoom > 0 && (
                       <div className={`${handoff.length ? "" : "is-missing"} ${state.kind === "act" ? "is-result" : ""}`}>
                         <strong>{handoffSummary(handoff)}</strong>
-                        {zoom === 2 && <small>{handoffRole(state)}</small>}
                         {zoom === 2 && usualTransition && (
                           <em>{usualTransition.when}</em>
                         )}
@@ -834,9 +826,6 @@ function StateFlowCanvas({
                   sequence.loopBack.targetId,
                 ))}
               </small>}
-              {zoom === 2 && (
-                <em>{handoffRole(stateById.get(sequence.loopBack.sourceId)!)}</em>
-              )}
               {zoom === 2 && <em>{sequence.loopBack.transition.when}</em>}
             </span>
           </button>
@@ -849,8 +838,8 @@ function StateFlowCanvas({
       {(loop.boundaries.length > 0 || runtimeStates.length > 0) && (
         <details className="flow-runtime-policies">
           <summary>
-            <span>Runtime safeguards</span>
-            <small>Setup, recovery, human, budget, and completion stay outside the result loop</small>
+            <span>Pauses and stopping rules</span>
+            <small>Human decisions, limits, recovery, and acceptance</small>
           </summary>
           <div>
             {loop.boundaries.map((boundary) => (
@@ -861,13 +850,13 @@ function StateFlowCanvas({
             ))}
             {setupStates.length > 0 && (
               <div>
-                <strong>First-time setup</strong>
+                <strong>Before work starts</strong>
                 <small>{setupStates.map((state) => state.name).join(" · ")}</small>
               </div>
             )}
             {runtimeStates.filter((state) => !setupStates.some((setup) => setup.id === state.id)).length > 0 && (
               <div>
-                <strong>Runtime handlers</strong>
+                <strong>Other recovery steps</strong>
                 <small>
                   {runtimeStates
                     .filter((state) => !setupStates.some((setup) => setup.id === state.id))
@@ -894,7 +883,6 @@ function StateFlowCanvas({
             <>
               <div className="flow-focus-heading">
                 <div>
-                  <span>{STATE_KIND_LABEL[focusedState.kind]}</span>
                   <strong>{focusedState.name}</strong>
                   <p>{focusedState.summary}</p>
                 </div>
@@ -916,7 +904,7 @@ function StateFlowCanvas({
 
               <div className="flow-contract">
                   <div className="flow-contract-inputs">
-                    <span>Input handoff</span>
+                    <span>Uses</span>
                     <ul>
                       {(focusedState.reads.length ? focusedState.reads : ["Nothing declared"]).map(
                         (item) => <li key={item}>{item}</li>,
@@ -924,7 +912,7 @@ function StateFlowCanvas({
                     </ul>
                   </div>
                   <div className="flow-contract-outputs">
-                    <span>{focusedState.kind === "act" ? "Result package" : "Output handoff"}</span>
+                    <span>Produces</span>
                     <ul>
                       {(focusedState.writes.length ? focusedState.writes : ["Nothing declared"]).map(
                         (item) => <li key={item}>{item}</li>,
@@ -932,15 +920,15 @@ function StateFlowCanvas({
                     </ul>
                   </div>
                   <div className="flow-contract-instruction">
-                    <span>What the agent does</span>
+                    <span>What happens</span>
                     <p>{focusedState.instruction}</p>
                   </div>
                   <div className="flow-contract-exit">
-                    <span>Exits when</span>
+                    <span>Ready when</span>
                     <p>{focusedState.completion}</p>
                   </div>
                   <div className="flow-contract-paths">
-                    <span>Exit outcomes</span>
+                    <span>What happens next</span>
                     {focusedState.transitions.length ? (
                       focusedState.transitions.map((transition) => (
                         <button
@@ -950,7 +938,13 @@ function StateFlowCanvas({
                         >
                           <strong>{transition.when}</strong>
                           <small>
-                            {TRANSITION_KIND_LABEL[transition.kind]} → {describeTarget(transition)}
+                            {transition.kind === "interrupt"
+                              ? "Pause"
+                              : transition.kind === "complete"
+                                ? "Finish"
+                                : transition.kind === "continue"
+                                  ? "Repeat"
+                                  : "Next"} → {describeTarget(transition)}
                           </small>
                         </button>
                       ))

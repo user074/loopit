@@ -49,7 +49,7 @@ test("server-renders the Loopit construction studio", async () => {
   assert.match(html, /New conversation/);
   assert.match(html, /\+ New/);
   assert.match(html, /History/);
-  assert.match(html, /No loop yet|Recurring project loop/);
+  assert.match(html, /No loop yet|How the work continues/);
   assert.match(html, /Construct my first loop|Trace handoffs/);
   assert.doesNotMatch(html, /codex-preview/);
   assert.doesNotMatch(html, /Your site is taking shape/);
@@ -70,23 +70,32 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.doesNotMatch(page, /_sites-preview|SkeletonPreview/);
   assert.match(studio, /FLOW_ZOOM_LABEL/);
   assert.match(studio, /FLOW_ZOOM_DESCRIPTION/);
-  assert.match(studio, /Recurring project loop/);
+  assert.match(studio, /How the work continues/);
   assert.match(studio, /StartingPackagePanel/);
-  assert.match(studio, /Before the loop starts/);
-  assert.match(studio, /First work enters step 1/);
+  assert.match(studio, /Before the cycle/);
+  assert.match(studio, /Starting point/);
+  assert.match(studio, /Start the cycle with/);
   assert.match(studio, /StartingPackageEditor/);
   assert.match(studio, /Ask agent to propose it/);
-  assert.match(studio, /Result package/);
-  assert.match(studio, /Runtime safeguards/);
+  assert.match(studio, /What is already known/);
+  assert.match(studio, /What remains to pursue/);
+  assert.match(studio, /What is ready to use/);
+  assert.match(studio, /What to do first/);
+  assert.match(studio, /Pauses and stopping rules/);
   assert.match(studio, /No named artifact handoff/);
-  assert.match(studio, /Project stages only/);
-  assert.match(studio, /Stage summaries and named handoffs/);
-  assert.match(studio, /Full instructions, evidence, and exit rules/);
+  assert.match(studio, /The work cycle in project language/);
+  assert.match(studio, /What each step produces for the next/);
+  assert.match(studio, /Instructions, evidence, and exit rules/);
   assert.match(studio, /flow-loop-return-arrow/);
   assert.match(studio, /Back to step/);
   assert.match(
     studio,
-    /zoom > 0[\s\S]*handoffSummary\(handoff\)[\s\S]*zoom === 2[\s\S]*handoffRole\(state\)/,
+    /zoom > 0[\s\S]*handoffSummary\(handoff\)[\s\S]*zoom === 2[\s\S]*usualTransition\.when/,
+  );
+  assert.doesNotMatch(studio, /handoffRole/);
+  assert.doesNotMatch(
+    studio,
+    /<small>\{STATE_KIND_LABEL\[state\.kind\]\}<\/small>/,
   );
   assert.match(
     studio,

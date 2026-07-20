@@ -1,6 +1,6 @@
 ---
 loopit: 1
-revision: 2
+revision: 5
 status: draft
 completion-policy: confirm
 start: frame-capability-slice
@@ -10,258 +10,283 @@ start: frame-capability-slice
 
 ## Objective
 
-Develop a privacy-conscious, testable job application agent that can ingest a user-approved profile and resume, discover relevant jobs, rank them against declared interests, prepare or submit truthful applications within explicit user authority, detect interview-related messages in an authorized mailbox, and notify the user. Advance these capabilities through bounded feature slices and sandbox evidence until a fresh completion challenge finds no blocking gap and the user confirms the scoped outcome.
+Develop a privacy-conscious, testable job application agent that can ingest a user-approved profile and resume, discover relevant jobs, rank them against declared interests, prepare or submit truthful applications within explicit user authority, prevent duplicate or unauthorized submissions, detect interview-related messages in an authorized mailbox, notify the user, and preserve an inspectable action history. Build it through a familiar software development cycle: choose a backlog item, plan the feature, implement it, test it, review the results, and update the backlog until the agreed product scope is complete.
 
 ## Starting Package
 
-### Initial job-agent capability evidence map
+### Current product status
 
 **ID:** `initial-job-agent-evidence-map`
 **Role:** `state`
-**Description:** The initial evidence-backed product model that will populate the state portion of the Job-agent capability map and frontier before the start state.
+**Description:** What is currently implemented, tested, constrained, or still unverified in the job application agent.
 
 #### Initial Contents
 
 - Observed baseline: the inspected repository contains Loopit's construction application, but it provides no observed implementation, build, fixtures, or test evidence for the proposed job-application agent.
-- Mark profile and resume ingestion, privacy controls, job discovery, interest matching, application preparation or authorized submission, interview-email detection, and notification delivery as `unverified`; do not describe any of them as working.
-- Record the current product constraints: truthful applicant data only, sandbox or mock integrations by default, no real credentials or personal resume data during the first slice, and no live application submission without explicit authority.
-- Reserve an evidence field for each capability containing its Feature-slice brief, build or commit reference, sandbox checks, observed verdict, limitations, and provenance once those results exist.
+- Before development begins, create revision 1 of Product status and feature backlog at `.loopit/runtime/job-agent/product-status.md`, using this starting point and the first planned feature; setup is ready when that file can be read back.
+- Mark profile and resume ingestion, privacy controls, job discovery, interest matching, application preparation or authorized submission, duplicate prevention, interview-email detection, notification delivery, and action history as `unverified`; do not describe any of them as working.
+- Record the current product constraints: truthful applicant data only, mock integrations by default, no real credentials or personal resume data during the first feature, and no live application submission without explicit permission.
+- For each feature, reserve space for its plan, code or commit reference, test results, known limitations, and source information once those results exist.
 
-### Initial job-agent capability gaps
+### Feature backlog
 
 **ID:** `initial-job-agent-capability-gaps`
 **Role:** `frontier`
-**Description:** The initial objective-grounded unresolved capability frontier that will populate the frontier portion of the Job-agent capability map and frontier; every item is caused by missing product evidence rather than an observed runtime failure.
+**Description:** The initial list of job-agent features that still need to be built and tested, ordered by their contribution to the product objective.
 
 #### Initial Contents
 
-- `GAP-01 — Applicant profile ingestion and privacy`: advances the profile-and-resume criterion; no implementation or test evidence was found; it remains unresolved because the agent has no verified normalized applicant model or privacy behavior; retire it when synthetic profile and resume scenarios produce the declared normalized fields, validation errors, provenance, and no raw-data logging in sandbox evidence.
-- `GAP-02 — Job discovery and normalization`: advances the discover-relevant-jobs criterion; missing adapters, fixtures, and evidence caused the gap; it remains unresolved because no source output is converted into inspectable normalized job records; retire it when an approved fixture or test source yields deduplicated records with source provenance and bounded failure behavior.
-- `GAP-03 — Interest-based job ranking`: advances the declared-interests criterion; the absence of a matching model and evaluation evidence caused the gap; it remains unresolved because relevance decisions cannot be explained or checked; retire it when representative positive, negative, and ambiguous fixtures receive reproducible rankings with inspectable reasons.
-- `GAP-04 — Truthful application preparation and authorized submission`: advances the application criterion; missing form-mapping behavior, guardrails, and submission-authority policy caused the gap; it remains unresolved because consequential answers and live actions are not safely bounded; retire it when sandbox applications use only approved applicant facts, surface unanswered sensitive fields, honor the recorded approval policy, and produce inspectable receipts without bypassing site safeguards.
-- `GAP-05 — Interview-message detection and notification`: advances the mailbox-and-notification criteria; missing provider-neutral message fixtures, classifier evidence, and a user-selected delivery channel caused the gap; it remains unresolved because interview signals and false positives are untested; retire it when authorized test messages yield reproducible detection, non-detection, deduplication, and notification evidence under the recorded mailbox and delivery policy.
+- `PROFILE-01 — Profile and resume import`: no implementation or tests exist yet. Done when synthetic profiles and resumes produce the required fields, report missing or conflicting data, keep field sources, and do not log raw resume text.
+- `DISCOVERY-02 — Job discovery`: no job-source adapter or tests exist yet. Done when an approved test source produces deduplicated job records with source links and clear error handling.
+- `MATCHING-03 — Interest-based job ranking`: no ranking implementation or evaluation exists yet. Done when representative good, poor, and ambiguous matches receive reproducible rankings with understandable reasons.
+- `APPLICATION-04 — Safe application preparation`: no form mapping, duplicate prevention, or approval flow exists yet. Done when tests use only approved applicant facts, surface unanswered sensitive fields, follow the approval policy, prevent duplicate submissions, and record every attempted action without bypassing site safeguards.
+- `MESSAGES-05 — Interview messages and notifications`: no mailbox classifier or notification test exists yet. Done when approved test messages verify detection, non-detection, duplicate handling, and notification delivery through the selected channel.
 
-### Local applicant-profile sandbox
+### Local development and test environment
 
 **ID:** `local-applicant-profile-sandbox`
 **Role:** `foundation`
-**Description:** The smallest reversible development apparatus needed for the first capability slice, using the repository's existing local Node.js 22 and Git conventions without cloud services, external accounts, or new live-data authority.
+**Description:** The local tools, test data, and Git workflow needed to implement and test the first feature without cloud services, external accounts, or real personal data.
 
 #### Initial Contents
 
 - Use an isolated TypeScript module, a focused local test command, and a stable branch or commit reference as the initial build and inspection boundary.
 - Prepare synthetic, non-sensitive fixtures for one valid structured profile and plain-text resume, one missing-required-field case, and one conflicting-field case; label all fixtures as fabricated test data.
-- Define a minimal normalized applicant schema covering contact placeholders, experience, education, skills, job interests, location or work-mode preferences, and field-level source provenance.
+- Define a minimal applicant data structure covering contact placeholders, experience, education, skills, job interests, location or work-mode preferences, and the source of each field.
 - Apply a default privacy rule that tests may assert validation and redaction behavior but may not print or persist raw resume contents outside the synthetic fixture set.
-- Defer scrapers, browser automation, mailbox connections, notification providers, credentials, and live submissions because none is required to inspect the first slice.
+- Store development notes and test results under `.loopit/runtime/job-agent/`; keep code in Git and record the exact commit or branch in the Test results.
+- Defer scrapers, browser automation, mailbox connections, notification providers, credentials, and live submissions because none is required for the first feature.
 
-### Normalize a synthetic applicant profile and resume
+### Build profile and resume import
 
 **ID:** `first-applicant-profile-slice`
 **Role:** `first-work`
-**Description:** The first bounded executable item selected from `GAP-01`, ready for the start state to express as a Feature-slice brief and for the local sandbox to produce the loop's Feature result.
+**Description:** The first feature selected from the backlog: import a synthetic applicant profile and resume into a consistent data structure and verify its privacy behavior.
 
 #### Initial Contents
 
-- Implement a local parser that accepts the synthetic structured profile plus plain-text resume and emits the minimal normalized applicant schema with field-level source provenance.
+- Implement a local parser that accepts the synthetic structured profile plus plain-text resume and produces the agreed applicant data structure with the source of each field.
 - Reject missing required inputs explicitly, report conflicting profile and resume fields without silently choosing one, and prevent raw resume contents from appearing in logs or generated evidence.
-- Deliver a branch or commit containing the parser, schema, fixtures, focused tests, and local run instructions as the Testable job-agent build.
-- Evaluate valid, missing-field, conflicting-field, and no-raw-data-logging scenarios; record only observed results and a completed, partial, failed, or blocked verdict in the Feature result.
-- Exclude live websites, real applicant data, job ranking, form submission, mailbox access, and notifications from this slice.
-- Retire this item only when the sandbox evidence satisfies the declared normalization, validation, provenance, conflict, and privacy checks; otherwise return the unresolved checks through capability-map review.
+- Deliver a branch or commit containing the parser, schema, fixtures, focused tests, and local run instructions as Working code.
+- Test valid, missing-field, conflicting-field, and no-raw-data-logging scenarios; record only observed outcomes in Test results.
+- Exclude live websites, real applicant data, job ranking, form submission, mailbox access, and notifications from this feature.
+- Mark this backlog item done only when the data conversion, validation, field-source, conflict, and privacy tests pass; otherwise return the failed checks to the backlog during review.
 
-## Artifacts and Boundaries
+## Artifacts
 
-### Job-agent capability map and frontier
+### Product status and feature backlog
 
 **ID:** `job-agent-capability-map`
-**Kind:** `durable-product-state`
-**Description:** The versioned view of objective criteria, implemented behavior, observable evidence, constraints, and unresolved capability gaps. Its initial criteria cover profile and resume ingestion, privacy controls, job discovery, interest matching, truthful application preparation or authorized submission, interview-email detection, and notification delivery. The frontier is derived from the distance between these criteria and current evidence.
+**Description:** The versioned record at `.loopit/runtime/job-agent/product-status.md` of implemented features, test evidence, known constraints, and prioritized backlog items. It covers profile and resume import, privacy, job discovery, matching, truthful and nonduplicate applications, interview-email detection, notifications, and action history.
 
-### Feature-slice brief
+### Feature plan
 
 **ID:** `feature-slice-brief`
-**Kind:** `bounded-feature-contract`
-**Description:** One capability gap translated into a bounded implementation slice, citing the prior capability-map version, objective criterion, triggering evidence, scope, acceptance scenarios, constraints, excluded live actions, intended native deliverable, and evidence that would retire the gap.
+**Description:** The implementation plan at `.loopit/runtime/job-agent/features/<feature-id>/plan.md` for one backlog item, including scope, acceptance criteria, failure cases, privacy constraints, excluded work, and tests required before the feature can be marked done.
 
-### Testable job-agent build
+### Working code
 
 **ID:** `testable-job-agent-build`
-**Kind:** `native-deliverable`
-**Description:** A stable branch or commit reference, runnable build instructions, tests, and sandbox fixtures or approved test integrations for the selected slice; when no build can be produced, the Feature result identifies the failed or blocked implementation attempt instead.
+**Description:** A branch or commit containing the implementation, automated tests, test data, and run instructions for the selected feature. If implementation is blocked, Test results record the failed attempt and its cause.
 
-### Feature result
+### Test results
 
 **ID:** `feature-result`
-**Kind:** `result-package`
-**Description:** The portable result for one Feature-slice brief. It references the brief and prior-state version; identifies the Testable job-agent build or explicit failed or blocked attempt; records environment, checks, observable evidence, and completed, partial, failed, or blocked outcome; explains changes and limitations; captures unresolved findings and candidate follow-up work; and preserves commit, tool, fixture, and session provenance for a fresh reviewer.
+**Description:** The observed test record at `.loopit/runtime/job-agent/features/<feature-id>/test-results.md` for one Feature plan. It references the code commit, environment, commands, test data, outputs, passed and failed checks, known limitations, and follow-up bugs so another developer can review or continue the work.
 
-### Product review disposition
+### Review decision
 
 **ID:** `product-review-disposition`
-**Kind:** `integration-decision`
-**Description:** The durable interpretation of a Feature result and exactly one next disposition: objective-backed frontier work, a scheduled observation because external evidence is expected, one human-owned decision, or a completion candidate.
+**Description:** The review outcome at `.loopit/runtime/job-agent/review.md`: merge or revise the feature, add or reprioritize backlog work, ask the user for one product decision, wait for a named external result, or propose that the agreed product scope is complete.
 
-### Boundary input
+### User decision
 
 **ID:** `boundary-input`
-**Kind:** `runtime-input`
-**Description:** One recorded human decision or scheduled external observation returned from a declared runtime boundary for integration into the capability map and frontier.
+**Description:** A product, privacy, permission, or risk decision recorded at `.loopit/runtime/job-agent/user-decision.md` so development can continue without relying on chat history.
 
-### Live actions, accounts, and sensitive answers
+### Runtime checkpoint
+
+**ID:** `runtime-checkpoint`
+**Description:** A checkpoint at `.loopit/runtime/job-agent/checkpoint.md` recording the current development step, exact input files and versions, partial work, last safe action, interruption cause, and where a fresh session should resume. A checkpoint is never treated as completed development work.
+
+### Release review
+
+**ID:** `completion-challenge`
+**Description:** An independent review at `.loopit/runtime/job-agent/release-review.md` that compares the proposed release with the agreed scope and test results. It identifies blocking bugs, one question for the user, or no blocking issue; it cannot approve evidence that has not been observed.
+
+## Boundaries
+
+### Live access and personal data
 
 **ID:** `live-action-authority`
 **Kind:** `interrupt`
-**Description:** Pause for explicit scope or authority before using personal credentials or live accounts, exposing profile or resume data outside approved systems, submitting or withdrawing a real application, answering consequential or sensitive application questions, or accepting material site terms. Never fabricate applicant facts or bypass CAPTCHAs, access controls, robots restrictions, or other site safeguards; sandbox and mock integrations remain available development work.
+**Description:** Pause before using personal credentials or live accounts, exposing profile or resume data outside approved systems, submitting or withdrawing a real application, answering sensitive questions, or accepting material site terms. Never fabricate applicant facts or bypass site safeguards. If permission is missing, block the live action, save a Runtime checkpoint, record the problem in Test results, and request one User decision before development continues.
 
-### Accepted job-agent outcome
+### Time or cost limit
+
+**ID:** `runtime-budget-reached`
+**Kind:** `budget`
+**Description:** Pause at the configured time, spend, or resource limit after saving a Runtime checkpoint. Resume the same development step later; never treat an interrupted feature as completed work.
+
+### Resume after interruption
+
+**ID:** `interrupted-session-recovery`
+**Kind:** `interrupt`
+**Description:** At each development step and saved output, refresh the Runtime checkpoint. After a session or tool interruption, verify the recorded files and partial work, then resume at the last safe action without duplicating external actions or claiming completion.
+
+### Accepted release
 
 **ID:** `accepted-job-agent-outcome`
 **Kind:** `complete`
-**Description:** Completion requires a fresh runtime challenge of the declared objective and evidence, no agent-owned blocking gap, and explicit user acceptance of the scoped product outcome; optional enhancements remain recorded without silently expanding the objective.
+**Description:** Finish only after an independent Release review finds no blocking issue and the user accepts the agreed product scope. Keep optional enhancements in the backlog without silently expanding the release.
 
 ## States
 
-### Frame the next job-agent capability slice
+### Plan the next feature
 
 **ID:** `frame-capability-slice`
 **Kind:** `decide`
-**Summary:** Select one objective-backed capability gap and turn it into a testable feature slice.
+**Summary:** Choose the highest-priority backlog item and define its scope, acceptance criteria, and tests.
 
 #### Reads
 
-- Job-agent capability map and frontier
+- Product status and feature backlog
+- Build profile and resume import
 
 #### Instruction
 
-Compare current product evidence with the objective and select the highest-value unresolved capability gap that can be advanced safely. Confirm that the frontier item cites its objective criterion, triggering result or missing evidence, reason it remains unresolved and non-duplicate, and retirement evidence. Produce one Feature-slice brief with a bounded scope, acceptance and failure scenarios, privacy and authority constraints, excluded live actions, intended Testable job-agent build, and checks that a fresh sandbox evaluator can run without hidden chat context.
+On the first iteration, plan Build profile and resume import. After that, compare Product status and feature backlog with the objective and choose the highest-priority unresolved feature. Confirm why it matters, why it is not already done, and which tests would allow it to be marked complete. Write one Feature plan with bounded scope, acceptance criteria, failure cases, privacy and permission constraints, excluded work, and tests another developer can run without chat history.
 
 #### Writes
 
-- Feature-slice brief
+- Feature plan
 
 #### Completion
 
-Exactly one inspectable Feature-slice brief is tied to a justified frontier item and contains enough context for implementation to begin.
+Exactly one Feature plan is tied to a prioritized backlog item and contains enough information for implementation to begin.
 
 #### Transitions
 
 | Next state | When | Kind | ID |
 | --- | --- | --- | --- |
-| `build-capability-slice` | The bounded brief names its objective criterion, deliverable, constraints, and acceptance evidence | `normal` | `frame-to-build` |
+| `build-capability-slice` | The Feature plan defines the scope, acceptance criteria, constraints, and required tests | `normal` | `frame-to-build` |
 
-### Build the selected job-agent capability
+### Implement the feature
 
 **ID:** `build-capability-slice`
 **Kind:** `act`
-**Summary:** Implement the bounded slice and package the build attempt with inspectable evidence.
+**Summary:** Write the code and focused automated tests described in the Feature plan.
 
 #### Reads
 
-- Feature-slice brief
+- Feature plan
+- Local development and test environment
 
 #### Instruction
 
-Implement only the selected slice, using sandbox fixtures or approved test integrations by default. Produce the Testable job-agent build and a Feature result that references the brief and prior capability-map version, records the build or failed attempt, environment, checks and observed evidence, assigns a completed, partial, failed, or blocked outcome, and captures limitations, unresolved findings, candidate follow-ups, and provenance. A negative outcome is a valid result and must not be hidden or rerouted around evaluation.
+Implement only the planned feature, using the Local development and test environment for the first iteration and approved test integrations later. Produce Working code and begin Test results that reference the Feature plan, code commit, environment, checks already run, known limitations, and any failed or blocked implementation attempt. Failed work still goes to testing and review; do not hide it or invent a separate process.
 
 #### Writes
 
-- Testable job-agent build
-- Feature result
+- Working code
+- Test results
 
 #### Completion
 
-A fresh evaluator can inspect a runnable build and preliminary checks, or the Feature result contains an explicit failed or blocked attempt with evidence sufficient to diagnose what happened.
+Another developer can inspect the Working code and preliminary tests, or Test results clearly explain why implementation failed or is blocked.
 
 #### Transitions
 
 | Next state | When | Kind | ID |
 | --- | --- | --- | --- |
-| `sandbox-evaluate-slice` | A Feature result records the build attempt and a completed, partial, failed, or blocked outcome | `normal` | `build-to-sandbox-evaluation` |
+| `sandbox-evaluate-slice` | Working code or a documented failed or blocked implementation attempt is ready for testing | `normal` | `build-to-sandbox-evaluation` |
 
-### Exercise the job-agent slice in a sandbox
+### Test the feature
 
 **ID:** `sandbox-evaluate-slice`
 **Kind:** `evaluate`
-**Summary:** Test the slice against its acceptance, failure, privacy, and authority scenarios.
+**Summary:** Run the planned automated and local tests, then record what passed, failed, or remains blocked.
 
 #### Reads
 
-- Feature-slice brief
-- Testable job-agent build
-- Feature result
+- Feature plan
+- Working code
+- Test results
 
 #### Instruction
 
-Independently exercise the build in the declared sandbox against every acceptance scenario and the relevant failure, privacy, truthfulness, and authority cases. Add only observed evidence to the Feature result, including environment and reproduction details, and assign the evidence-backed completed, partial, failed, or blocked verdict. If no runnable build exists, inspect and reproduce the recorded failure when possible and preserve why evaluation could not proceed. Record unresolved findings and candidate follow-up work without treating them as accepted frontier items.
+Run the Working code against every acceptance criterion and the relevant failure, privacy, truthfulness, duplicate-action, and permission cases in the Feature plan. Add only observed outcomes to Test results, including the environment and reproduction steps. If the code cannot run, reproduce the failure when possible and record why testing could not continue. List bugs and follow-up work for review without adding them to the backlog automatically.
 
 #### Writes
 
-- Feature result
+- Test results
 
 #### Completion
 
-The Feature result carries an explicit verdict, observable sandbox evidence for each declared scenario, limitations, and enough provenance for product review in a fresh session.
+Test results show the outcome of every planned scenario, known limitations, and enough detail for another developer to review the feature.
 
 #### Transitions
 
 | Next state | When | Kind | ID |
 | --- | --- | --- | --- |
-| `update-capability-map` | The evaluated Feature result is portable and has an explicit completed, partial, failed, or blocked verdict | `normal` | `evaluation-to-capability-update` |
+| `update-capability-map` | Test results record what passed, failed, or remains blocked | `normal` | `evaluation-to-capability-update` |
 
-### Update the job-agent capability map
+### Review results and update the backlog
 
 **ID:** `update-capability-map`
 **Kind:** `update`
-**Summary:** Interpret the feature evidence, update durable product truth, and justify what happens next.
+**Summary:** Review the code and tests, update product status, and choose the next backlog item or release decision.
 
 #### Reads
 
-- Job-agent capability map and frontier
-- Feature-slice brief
-- Feature result
-- Boundary input
+- Product status and feature backlog
+- Feature plan
+- Test results
+- User decision
+- Release review
 
 #### Instruction
 
-Interpret the Feature result against its brief and update the Job-agent capability map and frontier with verified behavior, failed checks, constraints, and evidence provenance. Retire a gap only when its declared retirement evidence exists. Admit a new frontier item only when it cites the objective criterion it advances; the result, observation, failed check, missing evidence, or explicit human scope change that caused it; why it remains unresolved and is not a duplicate; and the evidence that would retire it. Candidate follow-ups enter the frontier only when they satisfy this contract.
+Review Test results against the Feature plan. Update Product status and feature backlog with verified behavior, failed checks, and known constraints. Mark a backlog item done only when its acceptance criteria pass. Add a bug or follow-up only when it supports an objective requirement, is caused by a test result or explicit user scope change, is not a duplicate, and has a clear condition for completion.
 
-If the frontier is empty, compare the entire capability map and current evidence with the objective and record exactly one Product review disposition: one or more newly justified objective-backed frontier items; a scheduled observation naming when, where, and why external evidence is expected; one human-owned decision with the evidence and consequence; or a completion candidate with its supporting evidence and remaining assumptions. Never stop silently or invent unrelated work to preserve motion. Integrate any returned Boundary input before choosing the disposition.
+If the backlog is empty, compare Product status and test evidence with the objective and record exactly one Review decision: add one or more justified backlog items, wait for a named external result, ask the user for one product decision, or propose a release with its supporting tests and remaining assumptions. Never stop silently or invent unrelated features merely to keep working. Apply any returned User decision before choosing.
+
+When review proposes a release, run a fresh Release review. Add blocking bugs to the backlog, send one product question or rejection to `await-boundary-input`, and finish only when the review finds no blocking issue and the user accepts the proposed release.
 
 #### Writes
 
-- Job-agent capability map and frontier
-- Product review disposition
+- Product status and feature backlog
+- Review decision
 
 #### Completion
 
-Durable product state reflects the evaluated result, every frontier change is traceable, and exactly one next disposition is recorded for a fresh session.
+Product status reflects the test results and any User decision or Release review, every backlog change is explained, and one next action is recorded for another developer.
 
 #### Transitions
 
 | Next state | When | Kind | ID |
 | --- | --- | --- | --- |
-| `frame-capability-slice` | One or more justified capability-frontier items are ready for another bounded slice | `continue` | `update-to-frame` |
-| `await-boundary-input` | The disposition names one human-owned decision or a scheduled observation and no authorized slice can continue first | `interrupt` | `update-to-boundary` |
-| `preserve-accepted-outcome` | The disposition is a completion candidate, a fresh runtime challenge finds no agent-owned blocking gap, and the user explicitly accepts the scoped outcome | `complete` | `update-to-accepted-outcome` |
+| `frame-capability-slice` | Review leaves one or more prioritized backlog items ready for development | `continue` | `update-to-frame` |
+| `await-boundary-input` | Review needs one user decision or named external result before development can continue | `interrupt` | `update-to-boundary` |
+| `preserve-accepted-outcome` | Review proposes a release, the independent Release review finds no blocking issue, and the user accepts it | `complete` | `update-to-accepted-outcome` |
 
-### Await declared boundary input
+### Ask for a user decision
 
 **ID:** `await-boundary-input`
 **Kind:** `interrupt`
-**Summary:** Pause for one recorded human decision or scheduled external observation.
+**Summary:** Pause for one product, privacy, permission, or risk decision that only the user can make.
 
 #### Reads
 
-- Product review disposition
+- Review decision
 
 #### Instruction
 
-Present one focused decision with its evidence, recommendation, and consequence, or preserve the declared observation source and resume condition. Do not broaden authority or infer personal, legal, privacy, site-policy, or product preferences. Record the returned answer or observation as Boundary input so capability review can integrate it without hidden chat context.
+Present one focused question with the relevant test evidence, recommendation, and consequence, or name the external result and when to check it. Do not infer personal, legal, privacy, site-policy, or product preferences. Record the answer as User decision so development can continue without chat history.
 
 #### Writes
 
-- Boundary input
+- User decision
 
 #### Completion
 
@@ -271,27 +296,28 @@ The requested human direction or scheduled observation is recorded with its sour
 
 | Next state | When | Kind | ID |
 | --- | --- | --- | --- |
-| `update-capability-map` | The declared Boundary input is available for integration | `normal` | `boundary-to-capability-update` |
+| `update-capability-map` | The User decision or named external result is available for review | `normal` | `boundary-to-capability-update` |
 
-### Preserve the accepted job-agent outcome
+### Record the accepted release
 
 **ID:** `preserve-accepted-outcome`
 **Kind:** `terminal`
-**Summary:** Save the challenged evidence and the user's accepted product scope, then stop.
+**Summary:** Save the accepted release scope, supporting tests, and known limitations, then stop.
 
 #### Reads
 
-- Job-agent capability map and frontier
-- Product review disposition
-- Feature result
+- Product status and feature backlog
+- Review decision
+- Test results
+- Release review
 
 #### Instruction
 
-Record the accepted objective scope, fresh challenge verdict, human acceptance, supporting capability evidence, known limitations, and optional nonblocking follow-ups in the Product review disposition so the outcome remains inspectable without conversation history.
+Record the accepted product scope, Release review, user acceptance, supporting Test results, known limitations, and optional backlog items in the Review decision so another developer can understand the release without chat history.
 
 #### Writes
 
-- Product review disposition
+- Review decision
 
 #### Completion
 

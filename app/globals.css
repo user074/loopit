@@ -748,7 +748,6 @@ p {
   background: var(--soft);
 }
 
-.starting-package-grid article > span,
 .starting-package-editor section > span {
   display: block;
   margin-bottom: 4px;
@@ -757,6 +756,11 @@ p {
   font-weight: 750;
   letter-spacing: 0.05em;
   text-transform: uppercase;
+}
+
+.starting-package-grid article.is-first-work {
+  border-left-color: #6c9b7c;
+  background: var(--green-soft);
 }
 
 .starting-package-grid strong {
@@ -786,6 +790,10 @@ p {
   padding-top: 12px;
   color: #4e6f5b;
   font-size: 10px;
+}
+
+.starting-package-to-loop strong {
+  overflow-wrap: anywhere;
 }
 
 .starting-package-to-loop > span {

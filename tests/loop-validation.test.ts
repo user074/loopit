@@ -54,6 +54,13 @@ test("legacy Markdown defaults to human-confirmed completion", () => {
   assert.equal(parseLoopMarkdown(legacy).completionPolicy, "confirm");
 });
 
+test("legacy combined artifact and boundary sections remain recoverable", () => {
+  const combined = loopSource
+    .replace("## Artifacts\n", "## Artifacts and Boundaries\n")
+    .replace("## Boundaries\n", "");
+  assert.deepEqual(parseLoopMarkdown(combined), loop);
+});
+
 test("visual edits round-trip through Markdown without losing the loop", () => {
   const roundTripped = parseLoopMarkdown(serializeLoopMarkdown(loop));
   assert.deepEqual(roundTripped, loop);
@@ -93,6 +100,22 @@ test("validation requires one complete component for every starting role", () =>
       (finding) =>
         finding.id === "starting-package-content" &&
         finding.severity === "error",
+    ),
+  );
+});
+
+test("validation warns when engine language leaks into visible names", () => {
+  const generic = structuredClone(loop);
+  const firstState = generic.states[0];
+  assert.ok(firstState);
+  firstState.name = "Select work";
+
+  assert.ok(
+    validateLoop(generic).some(
+      (finding) =>
+        finding.id === "generic-visible-language" &&
+        finding.severity === "warning" &&
+        finding.elementId === firstState.id,
     ),
   );
 });
@@ -187,7 +210,7 @@ test("human-confirmed completion may use a runtime protocol outside the domain g
   evaluate.transitions.push({
     id: "evaluate-to-runtime-acceptance",
     to: "loop-complete",
-    when: "A fresh runtime challenge passes and the human accepts the candidate",
+    when: "An independent release review passes and the human accepts the candidate",
     kind: "complete",
   });
 

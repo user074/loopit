@@ -34,7 +34,7 @@ Keep useful work moving while making evidence and stopping conditions explicit.
 
 - Establish the first observable result that can update the work state.
 
-### Working foundation
+### Durable workbench
 
 **ID:** `working-foundation`
 **Role:** `foundation`

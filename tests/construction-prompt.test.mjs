@@ -37,6 +37,12 @@ test("rehearsal exhausts the frontier and rejects ungrounded continuation", () =
 
 test("construction proposes a generalized domain-specific starting package", () => {
   assert.match(daemon, /Propose a Starting Package before declaring the loop ready/);
+  assert.match(daemon, /Use established professional vocabulary, not newly coined Loopit vocabulary/);
+  assert.match(daemon, /Backlog -> Plan feature -> Implement -> Test -> Review or merge -> Update backlog/);
+  assert.match(daemon, /Hypothesis -> Method or experiment plan -> Experiment -> Data -> Analysis/);
+  assert.match(daemon, /Do not invent compound phrases such as Frame capability slice/);
+  assert.match(daemon, /practitioner can understand the overview without a Loopit glossary/);
+  assert.match(daemon, /Role values are internal Markdown structure, not user-facing vocabulary/);
   assert.match(daemon, /state: the evidence-backed model/);
   assert.match(daemon, /frontier: initial objective-backed/);
   assert.match(daemon, /foundation: the minimal apparatus, tools, data, access, authority/);
@@ -44,8 +50,17 @@ test("construction proposes a generalized domain-specific starting package", () 
   assert.match(daemon, /Do not assume software, cloud, or code/);
 });
 
+test("construction keeps artifacts and runtime boundaries in separate sections", () => {
+  assert.match(daemon, /One H2 Artifacts section/);
+  assert.match(daemon, /One separate H2 Boundaries section/);
+  assert.match(daemon, /Never combine Artifacts and Boundaries under one heading/);
+});
+
 test("rehearsal verifies that the starting package can actually begin", () => {
   assert.match(daemon, /Inspect the Starting Package before tracing the cycle/);
+  assert.match(daemon, /the H3 names must use terms familiar to a practitioner in that field/);
+  assert.match(daemon, /Fail both generic engine language and newly invented compound jargon/);
+  assert.match(daemon, /reject names such as Frame capability slice/);
   assert.match(daemon, /first work is drawn from the frontier/);
   assert.match(daemon, /pushing raw methodology, tool, infrastructure, or architecture selection onto a nonexpert/);
 });
