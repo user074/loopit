@@ -87,3 +87,12 @@ test("construction testing has a reachable passed outcome", () => {
   assert.match(daemon, /Runtime proof by itself does not lower PASS to RISK/);
   assert.match(daemon, /missing proof path/);
 });
+
+test("runtime is gated by the current passed revision and uses a separate worker", () => {
+  assert.match(daemon, /Pass Test this loop for revision/);
+  assert.match(daemon, /You are the worker for Loopit run/);
+  assert.match(daemon, /do not redesign it and do not edit \.loopit\/loop\.md/);
+  assert.match(daemon, /Begin from the declared first work and start state/);
+  assert.match(daemon, /url\.pathname === "\/api\/run"/);
+  assert.match(daemon, /mkdir\(runsDir/);
+});

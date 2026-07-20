@@ -271,3 +271,4 @@ next-env.d.ts
 /.loopit/conversations/
 /.loopit/test-report.md
 /.loopit/runtime/
+/.loopit/runs/

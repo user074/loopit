@@ -43,6 +43,7 @@ interface Health {
   ok: boolean;
   projectRoot: string;
   active: boolean;
+  activePurpose?: "test" | "runtime" | null;
   agents: Record<AgentName, AgentHealth>;
 }
 
@@ -74,6 +75,16 @@ interface AgentTestResult {
   loopRevision: number | null;
   testedAt: string | null;
   report: string;
+}
+
+interface RuntimeRun {
+  id: string;
+  loopRevision: number | null;
+  agent: AgentName;
+  status: "running" | "paused" | "failed" | "interrupted";
+  startedAt: string | null;
+  finishedAt: string | null;
+  summary: string;
 }
 
 interface WiringTestStep {
@@ -1316,6 +1327,9 @@ export function LoopStudio({
   const [humanReviewInput, setHumanReviewInput] = useState("");
   const [isHumanReviewSubmitting, setIsHumanReviewSubmitting] = useState(false);
   const [humanReviewError, setHumanReviewError] = useState<string | null>(null);
+  const [runtimeRun, setRuntimeRun] = useState<RuntimeRun | null>(null);
+  const [runtimeActivity, setRuntimeActivity] = useState("Ready to start");
+  const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wiringTestRunRef = useRef(0);
   const unifiedTestRunRef = useRef(0);
@@ -1327,6 +1341,7 @@ export function LoopStudio({
   const findings = useMemo(() => (loop ? validateLoop(loop) : []), [loop]);
   const blockingFindings = findings.filter((item) => item.severity === "error");
   const isUnifiedTestRunning = ACTIVE_TEST_STAGES.includes(unifiedTestStage);
+  const isRuntimeRunning = runtimeRun?.status === "running";
   const conversationList = conversations ?? [];
   const activeConversation = conversationList.find(
     (conversation) => conversation.id === activeConversationId,
@@ -1349,11 +1364,18 @@ export function LoopStudio({
 
   const refresh = useCallback(async () => {
     try {
-      const [healthResponse, loopResponse, conversationResponse, testResponse] = await Promise.all([
+      const [
+        healthResponse,
+        loopResponse,
+        conversationResponse,
+        testResponse,
+        runResponse,
+      ] = await Promise.all([
         fetch(`${DAEMON_URL}/api/health`),
         fetch(`${DAEMON_URL}/api/loop`),
         fetch(`${DAEMON_URL}/api/conversation`),
         fetch(`${DAEMON_URL}/api/test`),
+        fetch(`${DAEMON_URL}/api/run`),
       ]);
       if (healthResponse.ok) {
         const nextHealth = (await healthResponse.json()) as Health;
@@ -1379,6 +1401,12 @@ export function LoopStudio({
           result: AgentTestResult | null;
         };
         setAgentTest(payload.result);
+      }
+      if (runResponse.ok) {
+        const payload = (await runResponse.json()) as {
+          run: RuntimeRun | null;
+        };
+        setRuntimeRun(payload.run);
       }
     } catch {
       setActivity("Local bridge is offline");
@@ -1453,7 +1481,7 @@ export function LoopStudio({
   };
 
   const startNewConversation = async () => {
-    if (isWorking || isAgentTesting || isConversationChanging) return;
+    if (isWorking || isAgentTesting || isRuntimeRunning || isConversationChanging) return;
     setIsConversationChanging(true);
     try {
       const response = await fetch(`${DAEMON_URL}/api/conversations/new`, {
@@ -1484,6 +1512,7 @@ export function LoopStudio({
       id === activeConversationId ||
       isWorking ||
       isAgentTesting ||
+      isRuntimeRunning ||
       isConversationChanging
     ) {
       setIsHistoryOpen(false);
@@ -1522,7 +1551,12 @@ export function LoopStudio({
     allowDuringTest = false,
   ): Promise<string | null> => {
     const text = (textOverride ?? input).trim();
-    if (!text || isWorking || (isAgentTesting && !allowDuringTest)) return null;
+    if (
+      !text ||
+      isWorking ||
+      isRuntimeRunning ||
+      (isAgentTesting && !allowDuringTest)
+    ) return null;
 
     const selectedAgent = health?.agents[agent];
     if (selectedAgent && !selectedAgent.installed) {
@@ -1631,7 +1665,7 @@ export function LoopStudio({
     nextLoop: LoopDefinition,
     note: string,
   ): Promise<LoopDefinition | null> => {
-    if (isSaving || isWorking || isAgentTesting) return null;
+    if (isSaving || isWorking || isAgentTesting || isRuntimeRunning) return null;
     setIsSaving(true);
     try {
       const response = await fetch(`${DAEMON_URL}/api/loop`, {
@@ -1954,7 +1988,7 @@ export function LoopStudio({
   };
 
   const runAgentRehearsal = async (): Promise<AgentTestResult | null> => {
-    if (!loop || isWorking || isAgentTesting) return null;
+    if (!loop || isWorking || isAgentTesting || isRuntimeRunning) return null;
     setIsAgentTesting(true);
     setAgentTestActivity(
       `Starting a fresh, read-only ${agent === "codex" ? "Codex" : "Claude"} rehearsal`,
@@ -2033,7 +2067,13 @@ export function LoopStudio({
   const runUnifiedTest = async (
     startingLoop: LoopDefinition | null = loop,
   ) => {
-    if (!startingLoop || isWorking || isAgentTesting || isUnifiedTestRunning) return;
+    if (
+      !startingLoop ||
+      isWorking ||
+      isAgentTesting ||
+      isRuntimeRunning ||
+      isUnifiedTestRunning
+    ) return;
     const runId = unifiedTestRunRef.current + 1;
     unifiedTestRunRef.current = runId;
     const appendAudit = (...items: string[]) =>
@@ -2237,6 +2277,66 @@ export function LoopStudio({
     }
   };
 
+  const startRuntime = async () => {
+    if (!loop || !testPassed || isRuntimeRunning || isWorking || isAgentTesting) {
+      return;
+    }
+    setRuntimeError(null);
+    setRuntimeActivity("Starting the first loop worker");
+
+    try {
+      const response = await fetch(`${DAEMON_URL}/api/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent }),
+      });
+      if (!response.ok || !response.body) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || "The loop worker did not start.");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const packets = buffer.split("\n\n");
+        buffer = packets.pop() ?? "";
+        for (const packet of packets) {
+          const dataLine = packet
+            .split("\n")
+            .find((line) => line.startsWith("data: "));
+          if (!dataLine) continue;
+          const event = JSON.parse(dataLine.slice(6));
+          if (event.type === "activity") setRuntimeActivity(event.text);
+          if (event.type === "run_started" || event.type === "run_updated") {
+            setRuntimeRun(event.run as RuntimeRun);
+          }
+          if (event.type === "agent_message") {
+            setRuntimeActivity("Worker report saved");
+          }
+          if (event.type === "error") {
+            setRuntimeError(event.text);
+          }
+        }
+      }
+    } catch (error) {
+      setRuntimeError(
+        error instanceof Error ? error.message : "The loop worker failed.",
+      );
+    } finally {
+      await refresh();
+    }
+  };
+
+  const stopRuntime = async () => {
+    setRuntimeActivity("Stopping the loop worker");
+    await interrupt();
+    await refresh();
+  };
+
   return (
     <main className="studio-shell">
       <header className="studio-header">
@@ -2263,7 +2363,7 @@ export function LoopStudio({
             <div className="panel-heading-actions">
               <div className="conversation-actions">
                 <button
-                  disabled={isWorking || isAgentTesting || isConversationChanging}
+                  disabled={isWorking || isAgentTesting || isRuntimeRunning || isConversationChanging}
                   onClick={() => void startNewConversation()}
                   type="button"
                 >
@@ -2271,7 +2371,7 @@ export function LoopStudio({
                 </button>
                 <button
                   aria-expanded={isHistoryOpen}
-                  disabled={isWorking || isAgentTesting}
+                  disabled={isWorking || isAgentTesting || isRuntimeRunning}
                   onClick={() => setIsHistoryOpen((current) => !current)}
                   type="button"
                 >
@@ -2374,6 +2474,7 @@ export function LoopStudio({
             )}
             <textarea
               aria-label="Message the loop construction agent"
+              disabled={isRuntimeRunning}
               onChange={(event) => setInput(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
@@ -2398,7 +2499,7 @@ export function LoopStudio({
               ) : (
                 <button
                   className="button-primary"
-                  disabled={!input.trim()}
+                  disabled={!input.trim() || isRuntimeRunning}
                   onClick={() => void sendMessage()}
                   type="button"
                 >
@@ -2570,7 +2671,7 @@ export function LoopStudio({
                   </div>
                   <button
                     className="button-secondary"
-                    disabled={isSaving || isWorking || isAgentTesting || isUnifiedTestRunning}
+                    disabled={isSaving || isWorking || isAgentTesting || isRuntimeRunning || isUnifiedTestRunning}
                     onClick={() => setEditing("overview")}
                     type="button"
                   >
@@ -2607,7 +2708,7 @@ export function LoopStudio({
 
               <section className="sequence-section">
                 <StartingWorkPanel
-                  disabled={isSaving || isWorking || isAgentTesting || isUnifiedTestRunning}
+                  disabled={isSaving || isWorking || isAgentTesting || isRuntimeRunning || isUnifiedTestRunning}
                   editing={editing === "starting-work"}
                   items={loop.startingPackage}
                   onCancel={() => setEditing(null)}
@@ -2638,7 +2739,7 @@ export function LoopStudio({
 
                 <StateFlowCanvas
                   currentWiringStep={currentWiringStep}
-                  disabled={isSaving || isWorking || isAgentTesting || isUnifiedTestRunning}
+                  disabled={isSaving || isWorking || isAgentTesting || isRuntimeRunning || isUnifiedTestRunning}
                   editing={editing}
                   focusedStateId={focusedFlowStateId}
                   loop={loop}
@@ -2660,7 +2761,7 @@ export function LoopStudio({
                 />
 
                 <SetupPanel
-                  disabled={isSaving || isWorking || isAgentTesting || isUnifiedTestRunning}
+                  disabled={isSaving || isWorking || isAgentTesting || isRuntimeRunning || isUnifiedTestRunning}
                   editing={editing === "setup"}
                   items={loop.startingPackage}
                   onCancel={() => setEditing(null)}
@@ -2689,14 +2790,45 @@ export function LoopStudio({
                   zoom={flowZoom}
                 />
 
-                <details className={`test-lab flow-test-lab is-${testPanelTone}`}>
-                  <summary>
+              </section>
+
+              {findings.length > 0 && (
+                <details className="validation-details">
+                  <summary>Structural checks <span>{findings.length}</span></summary>
+                  <div>
+                    {findings.map((finding) => (
+                      <button
+                        className={`validation-row is-${finding.severity}`}
+                        key={finding.id}
+                        onClick={() => {
+                          if (finding.elementId) {
+                            setSelectedStateId(finding.elementId);
+                            setFocusedFlowStateId(finding.elementId);
+                            setFlowZoom(2);
+                            setEditing(finding.elementId);
+                          }
+                        }}
+                        type="button"
+                      >
+                        <span>{finding.severity === "pass" ? "✓" : "!"}</span>
+                        <div>
+                          <strong>{finding.title}</strong>
+                          <p>{finding.detail}</p>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </details>
+              )}
+
+                <section className={`test-lab flow-test-lab loop-test-section is-${testPanelTone}`}>
+                  <header className="loop-test-heading">
                     <div>
-                      <span className="eyebrow">Preflight</span>
+                      <span className="eyebrow">Required before runtime</span>
                       <strong>Test this loop</strong>
                     </div>
                     <span>{testPanelLabel}</span>
-                  </summary>
+                  </header>
 
                   <div className="flow-test-content">
                     <div className="test-lab-heading">
@@ -2716,7 +2848,7 @@ export function LoopStudio({
                         ) : (
                           <button
                             className="button-primary"
-                            disabled={isWorking || isAgentTesting}
+                            disabled={isWorking || isAgentTesting || isRuntimeRunning}
                             onClick={() =>
                               pendingHumanReview
                                 ? openHumanReview()
@@ -2943,36 +3075,78 @@ export function LoopStudio({
                       </details>
                     )}
                   </div>
-                </details>
-              </section>
-              {findings.length > 0 && (
-                <details className="validation-details">
-                  <summary>Structural checks <span>{findings.length}</span></summary>
+                </section>
+
+              <section
+                className={`runtime-launch ${
+                  isRuntimeRunning
+                    ? "is-running"
+                    : testPassed
+                      ? "is-ready"
+                      : "is-locked"
+                }`}
+              >
+                <header>
                   <div>
-                    {findings.map((finding) => (
-                      <button
-                        className={`validation-row is-${finding.severity}`}
-                        key={finding.id}
-                        onClick={() => {
-                          if (finding.elementId) {
-                            setSelectedStateId(finding.elementId);
-                            setFocusedFlowStateId(finding.elementId);
-                            setFlowZoom(2);
-                            setEditing(finding.elementId);
-                          }
-                        }}
-                        type="button"
-                      >
-                        <span>{finding.severity === "pass" ? "✓" : "!"}</span>
-                        <div>
-                          <strong>{finding.title}</strong>
-                          <p>{finding.detail}</p>
-                        </div>
-                      </button>
-                    ))}
+                    <span className="eyebrow">Runtime</span>
+                    <h3>Start the loop</h3>
                   </div>
-                </details>
-              )}
+                  <span>
+                    {isRuntimeRunning ? "Running" : testPassed ? "Ready" : "Locked"}
+                  </span>
+                </header>
+                <div className="runtime-launch-body">
+                  <div>
+                    <strong>
+                      {isRuntimeRunning
+                        ? runtimeActivity
+                        : testPassed
+                          ? "The current revision passed and can run"
+                          : `Pass Test this loop for revision ${loop.revision} first`}
+                    </strong>
+                    <p>
+                      {isRuntimeRunning
+                        ? "A separate local worker is following the tested loop and writing durable project artifacts."
+                        : testPassed
+                          ? `Start a separate ${agent === "codex" ? "Codex" : "Claude"} worker from the declared first task and state.`
+                          : "Runtime stays locked until the current revision passes every construction check."}
+                    </p>
+                  </div>
+                  {isRuntimeRunning ? (
+                    <button
+                      className="button-stop"
+                      onClick={() => void stopRuntime()}
+                      type="button"
+                    >
+                      Stop loop
+                    </button>
+                  ) : (
+                    <button
+                      className="button-primary button-large"
+                      disabled={
+                        !testPassed ||
+                        isWorking ||
+                        isAgentTesting ||
+                        isUnifiedTestRunning
+                      }
+                      onClick={() => void startRuntime()}
+                      type="button"
+                    >
+                      Start loop
+                    </button>
+                  )}
+                </div>
+                {runtimeError && <p className="runtime-error">{runtimeError}</p>}
+                {runtimeRun && runtimeRun.status !== "running" && (
+                  <details className="runtime-last-run">
+                    <summary>
+                      Last worker turn · {runtimeRun.status}
+                      {runtimeRun.loopRevision !== loop.revision && " · older revision"}
+                    </summary>
+                    <p>{runtimeRun.summary}</p>
+                  </details>
+                )}
+              </section>
             </div>
           )}
         </section>

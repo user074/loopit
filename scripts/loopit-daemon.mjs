@@ -29,6 +29,7 @@ const loopPath = path.join(loopitDir, "loop.md");
 const sessionPath = path.join(loopitDir, "session.json");
 const legacyConversationPath = path.join(loopitDir, "conversation.md");
 const conversationsDir = path.join(loopitDir, "conversations");
+const runsDir = path.join(loopitDir, "runs");
 const testReportPath = path.join(loopitDir, "test-report.md");
 const testOutputPath = path.join(loopitDir, ".test-agent-output.tmp");
 const port = Number(process.env.LOOPIT_DAEMON_PORT || 4318);
@@ -43,6 +44,7 @@ let conversationWriteQueue = Promise.resolve();
 await Promise.all([
   mkdir(loopitDir, { recursive: true }),
   mkdir(conversationsDir, { recursive: true }),
+  mkdir(runsDir, { recursive: true }),
 ]);
 
 async function readJson(file, fallback = null) {
@@ -256,6 +258,74 @@ async function readTestReportOrNull() {
   }
 }
 
+function newRunId() {
+  return `run-${Date.now()}-${randomUUID().slice(0, 8)}`;
+}
+
+function runPath(id) {
+  if (!/^run-\d+-[a-f0-9-]+$/.test(String(id ?? ""))) {
+    throw new Error("Invalid run identifier.");
+  }
+  return path.join(runsDir, `${id}.md`);
+}
+
+function serializeRunMarkdown(run) {
+  return `---
+loopit-run: 1
+run-id: ${run.id}
+loop-revision: ${run.loopRevision}
+agent: ${run.agent}
+status: ${run.status}
+started-at: ${run.startedAt}
+finished-at: ${run.finishedAt ?? ""}
+session-id: ${run.sessionId ?? ""}
+---
+
+# Loop run
+
+## Objective
+
+${run.objective}
+
+## Worker report
+
+${run.summary || "The worker is starting from the tested loop definition."}
+`;
+}
+
+async function writeRun(run) {
+  await writeText(runPath(run.id), serializeRunMarkdown(run));
+}
+
+async function readLatestRunOrNull() {
+  const files = (await readdir(runsDir))
+    .filter((name) => /^run-\d+-[a-f0-9-]+\.md$/.test(name))
+    .sort();
+  const latest = files.at(-1);
+  if (!latest) return null;
+  const markdown = await readFile(path.join(runsDir, latest), "utf8");
+  const frontMatter = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
+  const values = {};
+  for (const line of frontMatter?.[1].split(/\r?\n/) ?? []) {
+    const separator = line.indexOf(":");
+    if (separator !== -1) {
+      values[line.slice(0, separator).trim()] = line
+        .slice(separator + 1)
+        .trim();
+    }
+  }
+  const report = markdown.match(/\n## Worker report\s*\n\n([\s\S]*)$/)?.[1]?.trim();
+  return {
+    id: values["run-id"] ?? latest.slice(0, -3),
+    loopRevision: Number(values["loop-revision"]) || null,
+    agent: values.agent ?? "codex",
+    status: values.status ?? "stopped",
+    startedAt: values["started-at"] ?? null,
+    finishedAt: values["finished-at"] || null,
+    summary: report ?? "",
+  };
+}
+
 async function detectAgent(command) {
   try {
     const { stdout, stderr } = await execFileAsync(command, ["--version"], {
@@ -452,6 +522,53 @@ function rehearsalCommandFor(agent, prompt) {
   };
 }
 
+function runtimeCommandFor(agent, prompt) {
+  if (agent === "claude") {
+    return {
+      command: "claude",
+      args: [
+        "-p",
+        "--verbose",
+        "--output-format",
+        "stream-json",
+        "--permission-mode",
+        "acceptEdits",
+        "--allowedTools",
+        "Read,Glob,Grep,Edit,Write,Bash",
+      ],
+      input: prompt,
+    };
+  }
+
+  const modelArgs = process.env.LOOPIT_CODEX_MODEL
+    ? ["--model", process.env.LOOPIT_CODEX_MODEL]
+    : [];
+  return {
+    command: "codex",
+    args: [
+      "exec",
+      "--json",
+      ...modelArgs,
+      "--sandbox",
+      "workspace-write",
+      "-C",
+      projectRoot,
+      "-",
+    ],
+    input: prompt,
+  };
+}
+
+function runtimePrompt(runId) {
+  return `You are the worker for Loopit run ${runId}. The loop definition has passed construction testing for its current revision.
+
+Read .loopit/loop.md and .loopit/runs/${runId}.md. Execute the loop; do not redesign it and do not edit .loopit/loop.md, .loopit/test-report.md, conversation history, or another run record.
+
+Begin from the declared first work and start state. Follow the state instructions, named handoffs, setup, authority boundaries, retry rules, and completion policy. Use durable project artifacts as the source of truth. Perform real project work with the tools available in this local workspace. Keep moving through useful iterations until you reach an explicit human decision, permission boundary, completion condition, unrecoverable blocker, or this worker turn ends. Never invent credentials, private facts, evidence, or permission, and never bypass an external safeguard.
+
+End with a concise worker report describing the state reached, durable artifacts changed, evidence collected, and exact next state or human decision. Do not claim the overall loop is complete unless its declared completion policy is satisfied.`;
+}
+
 function rehearsalPrompt() {
   return `You are the independent test supervisor for a Loopit loop.
 
@@ -536,6 +653,20 @@ function eventLabel(event) {
   if (item.type === "file_change") return "Updating the loop proposal";
   if (item.type === "mcp_tool_call") return "Reading project context";
   if (item.type === "reasoning") return "Reconsidering the loop structure";
+  return null;
+}
+
+function runtimeEventLabel(event) {
+  const item = event.item;
+  if (!item) return null;
+  if (item.type === "command_execution") {
+    return item.status === "in_progress"
+      ? "Running project work"
+      : "Project command finished";
+  }
+  if (item.type === "file_change") return "Updating project artifacts";
+  if (item.type === "mcp_tool_call") return "Using a connected tool";
+  if (item.type === "reasoning") return "Planning the next loop step";
   return null;
 }
 
@@ -896,6 +1027,179 @@ ${report.trim()}
   });
 }
 
+async function streamRuntime(request, response) {
+  if (activeRun) {
+    json(response, 409, { error: "Another local agent is already working." });
+    return;
+  }
+
+  const [loop, test] = await Promise.all([
+    readLoopOrNull(),
+    readTestReportOrNull(),
+  ]);
+  if (!loop) {
+    json(response, 400, { error: "Construct a loop before starting it." });
+    return;
+  }
+  if (test?.verdict !== "pass" || test.loopRevision !== loop.revision) {
+    json(response, 409, {
+      error: `Pass Test this loop for revision ${loop.revision} before starting runtime.`,
+    });
+    return;
+  }
+
+  const body = await readBody(request);
+  const agent = body.agent === "claude" ? "claude" : "codex";
+  const run = {
+    id: newRunId(),
+    loopRevision: loop.revision,
+    objective: loop.objective,
+    agent,
+    status: "running",
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    sessionId: null,
+    summary: "",
+  };
+  await writeRun(run);
+
+  response.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+  });
+  const send = (event) => {
+    if (!response.writableEnded) {
+      response.write(`data: ${JSON.stringify(event)}\n\n`);
+    }
+  };
+
+  const invocation = runtimeCommandFor(agent, runtimePrompt(run.id));
+  send({
+    type: "run_started",
+    run: {
+      id: run.id,
+      loopRevision: run.loopRevision,
+      agent: run.agent,
+      status: run.status,
+      startedAt: run.startedAt,
+      finishedAt: null,
+      summary: "",
+    },
+  });
+  send({ type: "activity", text: "Starting the first loop worker" });
+
+  const child = spawn(invocation.command, invocation.args, {
+    cwd: projectRoot,
+    env: process.env,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  child.stdin.end(invocation.input);
+  activeRun = { child, agent, purpose: "runtime", runId: run.id };
+
+  let stdoutBuffer = "";
+  let stderrBuffer = "";
+  let finalSummary = "";
+  let discoveredSessionId = null;
+  let providerError = "";
+
+  const handleEvent = (event) => {
+    if (agent === "codex") {
+      if (event.type === "thread.started" && event.thread_id) {
+        discoveredSessionId = event.thread_id;
+      }
+      const label = runtimeEventLabel(event);
+      if (label && event.type === "item.started") {
+        send({ type: "activity", text: label });
+      }
+      if (event.type === "item.completed" && event.item?.type === "agent_message") {
+        finalSummary = event.item.text;
+        send({ type: "agent_message", text: finalSummary });
+      }
+      if (event.type === "turn.failed" || event.type === "error") {
+        providerError = readableProviderError(event, agent);
+        send({ type: "error", text: providerError });
+      }
+      return;
+    }
+
+    if (event.type === "system" && event.subtype === "init" && event.session_id) {
+      discoveredSessionId = event.session_id;
+    }
+    if (event.type === "assistant") {
+      const blocks = event.message?.content ?? [];
+      const tool = blocks.find((block) => block.type === "tool_use");
+      if (tool) send({ type: "activity", text: `Using ${tool.name}` });
+    }
+    if (event.type === "result") {
+      if (event.result) {
+        finalSummary = event.result;
+        send({ type: "agent_message", text: finalSummary });
+      }
+      if (event.is_error) {
+        providerError = readableProviderError(event, agent);
+        send({ type: "error", text: providerError });
+      }
+    }
+  };
+
+  child.stdout.on("data", (chunk) => {
+    stdoutBuffer += chunk.toString();
+    const lines = stdoutBuffer.split("\n");
+    stdoutBuffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        handleEvent(JSON.parse(line));
+      } catch {
+        // Only normalized provider events are shown in the runtime UI.
+      }
+    }
+  });
+
+  child.stderr.on("data", (chunk) => {
+    stderrBuffer = `${stderrBuffer}${chunk.toString()}`.slice(-12_000);
+  });
+
+  child.on("error", (error) => {
+    providerError = `${invocation.command} could not be started: ${error.message}`;
+    send({ type: "error", text: providerError });
+  });
+
+  child.on("close", async (code, signal) => {
+    activeRun = null;
+    const interrupted = signal === "SIGTERM";
+    const failure =
+      providerError ||
+      (code && code !== 0
+        ? stderrBuffer.trim().split("\n").slice(-3).join("\n") ||
+          `${invocation.command} exited with code ${code}.`
+        : "");
+    run.status = interrupted ? "interrupted" : failure ? "failed" : "paused";
+    run.finishedAt = new Date().toISOString();
+    run.sessionId = discoveredSessionId;
+    run.summary =
+      finalSummary ||
+      failure ||
+      (interrupted
+        ? "The worker was stopped by the user. Durable project artifacts remain available for a later resume."
+        : "The worker turn ended. Inspect the durable artifacts before resuming runtime.");
+    await writeRun(run);
+    const publicRun = {
+      id: run.id,
+      loopRevision: run.loopRevision,
+      agent: run.agent,
+      status: run.status,
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+      summary: run.summary,
+    };
+    send({ type: "run_updated", run: publicRun });
+    send({ type: "done", interrupted });
+    response.end();
+  });
+}
+
 const server = http.createServer(async (request, response) => {
   if (!setCors(request, response)) {
     json(response, 403, { error: "Origin is not allowed." });
@@ -920,6 +1224,7 @@ const server = http.createServer(async (request, response) => {
         ok: true,
         projectRoot,
         active: Boolean(activeRun),
+        activePurpose: activeRun?.purpose ?? null,
         agents: { codex, claude },
       });
       return;
@@ -983,6 +1288,11 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/run") {
+      json(response, 200, { run: await readLatestRunOrNull() });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/loop") {
       if (activeRun) {
         json(response, 409, {
@@ -1016,6 +1326,11 @@ const server = http.createServer(async (request, response) => {
 
     if (request.method === "POST" && url.pathname === "/api/test") {
       await streamRehearsal(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/run") {
+      await streamRuntime(request, response);
       return;
     }
 

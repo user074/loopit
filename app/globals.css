@@ -1950,7 +1950,12 @@ p {
   padding: 0;
 }
 
-.flow-test-lab > summary {
+.test-lab.flow-test-lab.loop-test-section {
+  margin: 0 0 22px;
+}
+
+.flow-test-lab > summary,
+.loop-test-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1960,16 +1965,19 @@ p {
   list-style: none;
 }
 
-.flow-test-lab > summary .eyebrow {
+.flow-test-lab > summary .eyebrow,
+.loop-test-heading .eyebrow {
   margin-bottom: 2px;
   font-size: 8px;
 }
 
-.flow-test-lab > summary strong {
+.flow-test-lab > summary strong,
+.loop-test-heading strong {
   font-size: 12px;
 }
 
-.flow-test-lab > summary > span {
+.flow-test-lab > summary > span,
+.loop-test-heading > span {
   padding: 4px 6px;
   border-radius: 5px;
   background: white;
@@ -1977,19 +1985,44 @@ p {
   font-size: 9px;
 }
 
-.flow-test-lab.is-passed > summary > span {
+.flow-test-lab.is-passed > summary > span,
+.flow-test-lab.is-passed > .loop-test-heading > span {
   background: var(--green-soft);
   color: #285d42;
 }
 
-.flow-test-lab.is-failed > summary > span {
+.flow-test-lab.is-failed > summary > span,
+.flow-test-lab.is-failed > .loop-test-heading > span {
   background: var(--amber-soft);
   color: #765026;
 }
 
-.flow-test-lab.is-running > summary > span {
+.flow-test-lab.is-running > summary > span,
+.flow-test-lab.is-running > .loop-test-heading > span {
   background: #edf2ee;
   color: #4b6255;
+}
+
+.loop-test-section.is-idle {
+  border: 2px solid #c99552;
+  background: #fff8ec;
+  box-shadow: 0 8px 24px rgba(125, 82, 31, 0.1);
+}
+
+.loop-test-section.is-idle > .loop-test-heading > span {
+  padding: 5px 8px;
+  background: #e9b96f;
+  color: #4f351b;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.loop-test-section.is-failed {
+  border-color: #d5a86d;
+}
+
+.loop-test-section.is-passed {
+  border-color: #a8c8b4;
 }
 
 .flow-test-content {
@@ -2434,6 +2467,115 @@ p {
   line-height: 1.5;
 }
 
+.runtime-launch {
+  margin-bottom: 22px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: white;
+}
+
+.runtime-launch > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.runtime-launch h3 {
+  margin: 2px 0 0;
+  font-size: 17px;
+}
+
+.runtime-launch > header > span {
+  padding: 5px 8px;
+  border-radius: 6px;
+  background: var(--soft);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.runtime-launch.is-ready {
+  border-color: #a8c8b4;
+}
+
+.runtime-launch.is-ready > header > span,
+.runtime-launch.is-running > header > span {
+  background: var(--green-soft);
+  color: #285d42;
+}
+
+.runtime-launch.is-locked {
+  background: #f5f5f2;
+}
+
+.runtime-launch-body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px;
+  padding: 17px 18px;
+}
+
+.runtime-launch-body > div {
+  min-width: 0;
+}
+
+.runtime-launch-body strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+
+.runtime-launch-body p {
+  max-width: 520px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.runtime-launch-body button {
+  flex: none;
+  min-width: 110px;
+}
+
+.runtime-error {
+  margin: 0 18px 16px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: var(--red-soft);
+  color: var(--red);
+  font-size: 10px;
+}
+
+.runtime-last-run {
+  margin: 0 18px 16px;
+  border-top: 1px solid var(--line);
+}
+
+.runtime-last-run summary {
+  padding: 10px 0;
+  cursor: pointer;
+  color: #55625b;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.runtime-last-run p {
+  max-height: 220px;
+  margin: 0;
+  overflow: auto;
+  padding: 0 0 12px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
 .text-button {
   padding: 5px 7px;
   border: 0;
@@ -2716,6 +2858,16 @@ p {
 
   .test-completion button {
     grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .runtime-launch-body {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .runtime-launch-body button {
     width: 100%;
   }
 

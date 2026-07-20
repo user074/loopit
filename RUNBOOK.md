@@ -1,6 +1,6 @@
 # Running Loopit locally
 
-This runbook covers the construction-studio MVP. `npm run dev` starts two local processes together:
+This runbook covers the construction gate and first local runtime worker. `npm run dev` starts two local processes together:
 
 - The web interface at `http://localhost:3000`.
 - The local-agent daemon at `http://127.0.0.1:4318`.
@@ -35,6 +35,8 @@ The health response lists the local agent CLIs Loopit can find. If Codex is inst
 
 Use **Stop agent** in the construction chat to interrupt only the active Codex or Claude turn. The Loopit web interface and daemon remain running, and the saved loop proposal is preserved.
 
+When a loop worker is active, use **Stop loop** in the Runtime section instead. This interrupts the worker without stopping Loopit and preserves the project artifacts and readable run record created so far.
+
 ## Stop Loopit
 
 Return to the terminal running `npm run dev` and press:
@@ -51,17 +53,18 @@ Stopping Loopit preserves these files when they have been created:
 - `.loopit/session.json`, the active-conversation pointer and resumable local-agent session identifiers.
 - `.loopit/conversations/*.md`, the readable local conversation histories shown after a page reload or selected from **History**.
 - `.loopit/test-report.md`, the latest fresh-agent rehearsal report.
+- `.loopit/runs/*.md`, readable records of local worker turns.
 
 Use **New** in the conversation header to start an empty conversation with a fresh Codex or Claude session. The current conversation moves into **History** rather than being destroyed. Selecting a past conversation restores both its visible messages and its own local-agent session. Conversation switching does not delete or replace `.loopit/loop.md`; all conversations in the project discuss the same current loop definition.
 
 ## Test a loop before running it
 
-The **Preflight** section on the right offers two bounded tests:
+The separate **Test this loop** section follows structural checks and presents one bounded path to Passed:
 
 1. **Trace every path** animates one ordinary recurrence and every alternate transition. It fails when the cycle does not close, a transition is missing, or a structural check blocks continuation. This test is deterministic and does not start an agent.
-2. **Test with Codex** or **Test with Claude** launches a new read-only agent session with no construction-chat context. The agent challenges state inputs, completion conditions, recovery paths, interrupts, and completion exits, then saves a Markdown report. It also verifies that a first draft or completed iteration cannot masquerade as project completion: candidate completion must follow the selected policy and, for human-confirmed or evidence-based completion, pass through a fresh challenger. The rehearsal cannot modify files or execute the proposed production work. If the result needs work, Loopit immediately sends it to the construction agent: agent-owned gaps are repaired in the loop, while missing human intent, permission, facts, thresholds, or policy become one focused question in chat.
+2. A fresh Codex or Claude session with no construction-chat context challenges state inputs, completion conditions, recovery paths, interrupts, and completion exits, then saves a Markdown report. It also verifies that a first draft or completed iteration cannot masquerade as project completion: candidate completion must follow the selected policy and, for human-confirmed or evidence-based completion, pass through a fresh challenger. The rehearsal cannot modify files or execute the proposed production work. If the result needs work, Loopit repairs agent-owned gaps and opens a focused right-panel review for missing human intent, permission, facts, thresholds, or policy, then retests automatically.
 
-The first test proves control-flow wiring. The second tests whether a fresh agent can understand and rehearse the contracts. Neither substitutes for a later sandboxed integration run with representative artifacts and tools; the report must turn those remaining assumptions into explicit next test actions rather than treating them as proven or silently stopping.
+Passed unlocks **Start loop** at the bottom of the right panel. Start launches a separate local worker from the declared first task and state; it does not reuse the construction conversation. The worker may modify project files while following the tested loop, but it may not redesign `.loopit/loop.md`. Neither construction test substitutes for representative runtime evidence; the loop must specify how the worker collects that evidence and routes failures.
 
 ## If the original terminal is gone
 

@@ -51,6 +51,8 @@ test("server-renders the Loopit construction studio", async () => {
   assert.match(html, /History/);
   assert.match(html, /No loop yet|How the work continues/);
   assert.match(html, /Construct my first loop|Start test|Continue test|Review decision|Test again/);
+  assert.match(html, /Start the loop/);
+  assert.match(html, /Start loop/);
   assert.doesNotMatch(html, /codex-preview/);
   assert.doesNotMatch(html, /Your site is taking shape/);
 });
@@ -97,6 +99,7 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.match(studio, /Back to step/);
   assert.match(studio, /runUnifiedTest/);
   assert.match(studio, /One path to a final result/);
+  assert.match(studio, /Required before runtime/);
   assert.match(studio, /What was checked or changed/);
   assert.match(studio, /Path to a passed loop test/);
   assert.match(studio, /Trace every path/);
@@ -104,6 +107,10 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.match(studio, /Fix or ask you/);
   assert.match(studio, /Loop test passed/);
   assert.match(studio, /Continue test/);
+  assert.match(studio, /runtime-launch/);
+  assert.match(studio, /Pass Test this loop for revision/);
+  assert.match(studio, /fetch\(`\$\{DAEMON_URL\}\/api\/run`/);
+  assert.match(studio, /Start loop/);
   assert.match(studio, /Automatic repair created revision/);
   assert.match(studio, /extractHumanReview/);
   assert.match(studio, /human-review-overlay/);
@@ -117,6 +124,10 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.match(
     studio,
     /<StartingWorkPanel[\s\S]*<StateFlowCanvas[\s\S]*<SetupPanel/,
+  );
+  assert.match(
+    studio,
+    /className="validation-details"[\s\S]*loop-test-section[\s\S]*runtime-launch/,
   );
   assert.match(
     studio,
