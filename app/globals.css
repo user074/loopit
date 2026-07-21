@@ -2703,6 +2703,154 @@ p {
   min-width: 110px;
 }
 
+.runtime-iterations {
+  margin: 0 18px 16px;
+  overflow: hidden;
+  border: 1px solid #d7e2da;
+  border-radius: 11px;
+  background: #f8fbf8;
+}
+
+.runtime-iterations > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 12px;
+  border-bottom: 1px solid #dfe7e1;
+}
+
+.runtime-iterations > header div,
+.runtime-iterations > header strong,
+.runtime-iterations > header span {
+  display: block;
+}
+
+.runtime-iterations > header strong {
+  margin-bottom: 2px;
+  font-size: 11px;
+}
+
+.runtime-iterations > header span {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.runtime-iterations > header i {
+  color: #397454;
+  font-size: 19px;
+  font-style: normal;
+}
+
+.runtime-iterations ol {
+  display: grid;
+  gap: 0;
+  max-height: 430px;
+  margin: 0;
+  overflow: auto;
+  padding: 0;
+  list-style: none;
+}
+
+.runtime-iterations li {
+  display: grid;
+  grid-template-columns: 27px minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid #e4e9e5;
+}
+
+.runtime-iterations li:last-child {
+  border-bottom: 0;
+}
+
+.runtime-iterations li > span {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  border-radius: 50%;
+  background: #dcece1;
+  color: #2c6445;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9px;
+  font-weight: 850;
+}
+
+.runtime-iterations li.is-running > span {
+  animation: pulse 1.4s ease-in-out infinite;
+  background: #2f704d;
+  color: white;
+}
+
+.runtime-iterations li > div {
+  min-width: 0;
+}
+
+.runtime-iterations li header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.runtime-iterations li header small {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.runtime-iterations li header em {
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: #e1eee5;
+  color: #2e6848;
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.runtime-iterations li.is-pause header em {
+  background: var(--amber-soft);
+  color: #80601f;
+}
+
+.runtime-iterations li.is-complete header em {
+  background: var(--green-soft);
+  color: #285d42;
+}
+
+.runtime-iterations li strong {
+  display: block;
+  color: var(--ink);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.runtime-iterations li p {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 5px;
+  margin: 6px 0 4px;
+  color: #56625c;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.runtime-iterations li p b {
+  color: #2f704d;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.runtime-iterations li > div > small {
+  color: #78827d;
+  font-size: 8px;
+}
+
 .runtime-activity-monitor {
   margin: 0 18px 16px;
   padding: 11px 12px;

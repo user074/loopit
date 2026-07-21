@@ -104,7 +104,13 @@ test("runtime is gated by the current passed revision and uses a separate worker
   assert.match(daemon, /Pass Test this loop for revision/);
   assert.match(daemon, /You are the worker for Loopit run/);
   assert.match(daemon, /do not redesign it and do not edit \.loopit\/loop\.md/);
-  assert.match(daemon, /Begin from the declared first work and start state/);
+  assert.match(daemon, /Begin at the declared start state/);
+  assert.match(daemon, /Do not restart completed work/);
+  assert.match(daemon, /Complete exactly one useful ordinary recurrence/);
+  assert.match(daemon, /Outcome: CONTINUE, PAUSE, or COMPLETE/);
+  assert.match(daemon, /parseRuntimeHandoff/);
+  assert.match(daemon, /Loop iteration \$\{iterationNumber\} completed/);
+  assert.match(daemon, /handoff\.outcome === "continue"/);
   assert.match(daemon, /url\.pathname === "\/api\/run"/);
   assert.match(daemon, /mkdir\(runsDir/);
   assert.match(daemon, /activeRun\?\.purpose === "runtime"/);

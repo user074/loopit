@@ -23,6 +23,11 @@ import {
   parseLoopMarkdown,
   serializeLoopMarkdown,
 } from "../lib/loop-markdown.mjs";
+import {
+  parseRuntimeHandoff,
+  parseRuntimeIterations,
+  serializeRuntimeIterations,
+} from "../lib/runtime-handoff.mjs";
 
 const execFileAsync = promisify(execFile);
 const daemonAppRoot = path.resolve(
@@ -310,6 +315,7 @@ function serializeRunMarkdown(run) {
         )
         .join("\n")
     : "_No activity recorded._";
+  const iterations = serializeRuntimeIterations(run.iterations);
   return `---
 loopit-run: 1
 run-id: ${run.id}
@@ -319,6 +325,8 @@ status: ${run.status}
 started-at: ${run.startedAt}
 finished-at: ${run.finishedAt ?? ""}
 session-id: ${run.sessionId ?? ""}
+current-iteration: ${run.currentIteration ?? ""}
+iterations-completed: ${(run.iterations ?? []).length}
 ---
 
 # Loop run
@@ -327,11 +335,15 @@ session-id: ${run.sessionId ?? ""}
 
 ${run.objective}
 
+## Completed iterations
+
+${iterations}
+
 ## Activity
 
 ${activities}
 
-## Worker report
+## Latest worker report
 
 ${run.summary || "The worker is starting from the tested loop definition."}
 `;
@@ -358,9 +370,11 @@ async function readLatestRunOrNull() {
         .trim();
     }
   }
-  const report = markdown.match(/\n## Worker report\s*\n\n([\s\S]*)$/)?.[1]?.trim();
+  const report = markdown.match(
+    /\n## (?:Latest worker report|Worker report)\s*\n\n([\s\S]*)$/,
+  )?.[1]?.trim();
   const activitySection = markdown.match(
-    /\n## Activity\s*\n\n([\s\S]*?)(?=\n## Worker report)/,
+    /\n## Activity\s*\n\n([\s\S]*?)(?=\n## (?:Latest worker report|Worker report))/,
   )?.[1];
   const activities = (activitySection ?? "")
     .split(/\r?\n/)
@@ -383,8 +397,10 @@ async function readLatestRunOrNull() {
     status: values.status ?? "stopped",
     startedAt: values["started-at"] ?? null,
     finishedAt: values["finished-at"] || null,
+    currentIteration: Number(values["current-iteration"]) || null,
     summary: report ?? "",
     activities,
+    iterations: parseRuntimeIterations(markdown),
   };
 }
 
@@ -640,14 +656,26 @@ function runtimeCommandFor(agent, prompt) {
   };
 }
 
-function runtimePrompt(runId) {
-  return `You are the worker for Loopit run ${runId}. The loop definition has passed construction testing for its current revision.
+function runtimePrompt(runId, iterationNumber) {
+  return `You are the worker for Loopit run ${runId}, iteration ${iterationNumber}. The loop definition has passed construction testing for its current revision.
 
-Read .loopit/loop.md and .loopit/runs/${runId}.md. Execute the loop; do not redesign it and do not edit .loopit/loop.md, .loopit/test-report.md, conversation history, or another run record.
+Read .loopit/loop.md and .loopit/runs/${runId}.md. Execute the loop; do not redesign it and do not edit .loopit/loop.md, .loopit/test-report.md, conversation history, or any file under .loopit/runs. Loopit owns the run record; put product evidence and continuation state in the domain artifacts declared by the loop.
 
-Begin from the declared first work and start state. Follow the state instructions, named handoffs, setup, authority boundaries, retry rules, and completion policy. Use durable project artifacts as the source of truth. Perform real project work with the tools available in this local workspace. Keep moving through useful iterations until you reach an explicit human decision, permission boundary, completion condition, unrecoverable blocker, or this worker turn ends. Never invent credentials, private facts, evidence, or permission, and never bypass an external safeguard.
+${iterationNumber === 1 ? "Begin at the declared start state. Use the declared first work only when durable domain artifacts have not been initialized; otherwise select the latest objective-backed work from the durable state and frontier. Do not restart completed work." : "Resume from the latest completed iteration's Next and State fields plus the durable product state and frontier. Do not restart completed work."} Follow the state instructions, named handoffs, setup, authority boundaries, retry rules, and completion policy. Use durable project artifacts as the source of truth. Perform real project work with the tools available in this local workspace.
 
-End with a concise worker report describing the state reached, durable artifacts changed, evidence collected, and exact next state or human decision. Do not claim the overall loop is complete unless its declared completion policy is satisfied.`;
+Complete exactly one useful ordinary recurrence: select the current objective-backed work, produce or update its native deliverable, test or evaluate it, integrate the result into durable state, and update the frontier. A partial, failed, or blocked attempt still completes an iteration when its evidence is integrated and an exact next action is durable. Do not stop merely because one feature implementation or one agent response ended. Never invent credentials, private facts, evidence, or permission, and never bypass an external safeguard.
+
+End with a concise worker report describing the state reached, durable artifacts changed, evidence collected, and exact next state or human decision. Do not claim the overall loop is complete unless its declared completion policy is satisfied.
+
+End the report with this exact Markdown section and one-line fields:
+## Loopit iteration
+Outcome: CONTINUE, PAUSE, or COMPLETE
+State: exact next state ID, or the boundary reached
+Completed: the concrete feature, hypothesis, design decision, case, or other domain work completed or advanced in this iteration
+Next: the exact next objective-backed work or human action
+Reason: why the scheduler should continue, pause, or complete
+
+Use CONTINUE whenever another justified frontier item or follow-up remains. Use PAUSE only for an explicit human decision, permission boundary, budget boundary, scheduled observation, or unrecoverable blocker. Use COMPLETE only when the loop's declared completion policy has actually accepted the overall objective.`;
 }
 
 function rehearsalPrompt() {
@@ -1313,6 +1341,8 @@ async function streamRuntime(request, response) {
     startedAt: new Date().toISOString(),
     finishedAt: null,
     sessionId: null,
+    currentIteration: 1,
+    iterations: [],
     summary: "",
     activities: [],
   };
@@ -1324,40 +1354,34 @@ async function streamRuntime(request, response) {
     Connection: "keep-alive",
   });
   const send = (event) => {
-    if (!response.writableEnded) {
+    if (!response.writableEnded && !response.destroyed) {
       response.write(`data: ${JSON.stringify(event)}\n\n`);
     }
   };
 
-  const invocation = runtimeCommandFor(agent, runtimePrompt(run.id));
-  send({
-    type: "run_started",
-    run: {
-      id: run.id,
-      loopRevision: run.loopRevision,
-      agent: run.agent,
-      active: true,
-      status: run.status,
-      startedAt: run.startedAt,
-      finishedAt: null,
-      summary: "",
-      activities: run.activities,
-    },
+  const publicRun = (active) => ({
+    id: run.id,
+    loopRevision: run.loopRevision,
+    agent: run.agent,
+    active,
+    status: run.status,
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt,
+    currentIteration: run.currentIteration,
+    iterations: run.iterations,
+    summary: run.summary,
+    activities: run.activities,
   });
 
-  const child = spawn(invocation.command, invocation.args, {
-    cwd: projectRoot,
-    env: process.env,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  child.stdin.end(invocation.input);
   activeRun = {
-    child,
+    child: null,
     agent,
     purpose: "runtime",
     runId: run.id,
     activities: run.activities,
+    stopRequested: false,
   };
+  send({ type: "run_started", run: publicRun(true) });
 
   const publishActivity = (activity) => {
     const entry = {
@@ -1372,118 +1396,211 @@ async function streamRuntime(request, response) {
     send({ type: "activity", ...entry });
   };
   publishActivity({
-    text: "Starting the first loop worker",
-    detail: `Working in ${projectRoot}`,
+    text: "Starting continuous runtime",
+    detail: `Iteration 1 · working in ${projectRoot}`,
     kind: "start",
   });
 
-  let stdoutBuffer = "";
-  let stderrBuffer = "";
-  let finalSummary = "";
-  let discoveredSessionId = null;
-  let providerError = "";
+  const runWorkerIteration = async (iterationNumber) => {
+    const invocation = runtimeCommandFor(
+      agent,
+      runtimePrompt(run.id, iterationNumber),
+    );
+    const startedAt = new Date().toISOString();
+    run.currentIteration = iterationNumber;
+    publishActivity({
+      text: `Starting loop iteration ${iterationNumber}`,
+      detail:
+        iterationNumber === 1
+          ? "Beginning from the declared first work"
+          : "Continuing from the previous durable handoff",
+      kind: "iteration",
+    });
+    await writeRun(run);
+    send({ type: "run_updated", run: publicRun(true) });
 
-  const handleEvent = (event) => {
-    if (agent === "codex") {
-      if (event.type === "thread.started" && event.thread_id) {
-        discoveredSessionId = event.thread_id;
-      }
-      const progress = codexActivity(event, "runtime");
-      if (progress) publishActivity(progress);
-      if (event.type === "item.completed" && event.item?.type === "agent_message") {
-        finalSummary = event.item.text;
-        send({ type: "agent_message", text: finalSummary });
-      }
-      if (event.type === "turn.failed" || event.type === "error") {
-        providerError = readableProviderError(event, agent);
-        send({ type: "error", text: providerError });
-      }
-      return;
-    }
+    return new Promise((resolve) => {
+      const child = spawn(invocation.command, invocation.args, {
+        cwd: projectRoot,
+        env: process.env,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      if (activeRun?.runId === run.id) activeRun.child = child;
+      child.stdin.end(invocation.input);
 
-    if (event.type === "system" && event.subtype === "init" && event.session_id) {
-      discoveredSessionId = event.session_id;
-    }
-    if (event.type === "assistant") {
-      const blocks = event.message?.content ?? [];
-      blocks
-        .filter((block) => block.type === "tool_use")
-        .forEach((tool) =>
-          publishActivity({
-            ...claudeToolActivity(tool, "runtime"),
-            status: "active",
-          }),
-        );
-    }
-    if (event.type === "result") {
-      if (event.result) {
-        finalSummary = event.result;
-        send({ type: "agent_message", text: finalSummary });
-      }
-      if (event.is_error) {
-        providerError = readableProviderError(event, agent);
+      let stdoutBuffer = "";
+      let stderrBuffer = "";
+      let finalSummary = "";
+      let discoveredSessionId = null;
+      let providerError = "";
+
+      const handleEvent = (event) => {
+        if (agent === "codex") {
+          if (event.type === "thread.started" && event.thread_id) {
+            discoveredSessionId = event.thread_id;
+          }
+          const progress = codexActivity(event, "runtime");
+          if (progress) publishActivity(progress);
+          if (
+            event.type === "item.completed" &&
+            event.item?.type === "agent_message"
+          ) {
+            finalSummary = event.item.text;
+            send({ type: "agent_message", text: finalSummary });
+          }
+          if (event.type === "turn.failed" || event.type === "error") {
+            providerError = readableProviderError(event, agent);
+            send({ type: "error", text: providerError });
+          }
+          return;
+        }
+
+        if (
+          event.type === "system" &&
+          event.subtype === "init" &&
+          event.session_id
+        ) {
+          discoveredSessionId = event.session_id;
+        }
+        if (event.type === "assistant") {
+          const blocks = event.message?.content ?? [];
+          blocks
+            .filter((block) => block.type === "tool_use")
+            .forEach((tool) =>
+              publishActivity({
+                ...claudeToolActivity(tool, "runtime"),
+                status: "active",
+              }),
+            );
+        }
+        if (event.type === "result") {
+          if (event.result) {
+            finalSummary = event.result;
+            send({ type: "agent_message", text: finalSummary });
+          }
+          if (event.is_error) {
+            providerError = readableProviderError(event, agent);
+            send({ type: "error", text: providerError });
+          }
+        }
+      };
+
+      child.stdout.on("data", (chunk) => {
+        stdoutBuffer += chunk.toString();
+        const lines = stdoutBuffer.split("\n");
+        stdoutBuffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            handleEvent(JSON.parse(line));
+          } catch {
+            // Only normalized provider events are shown in the runtime UI.
+          }
+        }
+      });
+
+      child.stderr.on("data", (chunk) => {
+        stderrBuffer = `${stderrBuffer}${chunk.toString()}`.slice(-12_000);
+      });
+
+      child.on("error", (error) => {
+        providerError = `${invocation.command} could not be started: ${error.message}`;
         send({ type: "error", text: providerError });
-      }
-    }
+      });
+
+      child.on("close", (code, signal) => {
+        if (activeRun?.runId === run.id) activeRun.child = null;
+        const interrupted =
+          signal === "SIGTERM" || activeRun?.stopRequested === true;
+        const failure =
+          providerError ||
+          (code && code !== 0
+            ? stderrBuffer.trim().split("\n").slice(-3).join("\n") ||
+              `${invocation.command} exited with code ${code}.`
+            : "");
+        resolve({
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          finalSummary,
+          discoveredSessionId,
+          interrupted,
+          failure,
+        });
+      });
+    });
   };
 
-  child.stdout.on("data", (chunk) => {
-    stdoutBuffer += chunk.toString();
-    const lines = stdoutBuffer.split("\n");
-    stdoutBuffer = lines.pop() ?? "";
-    for (const line of lines) {
-      if (!line.trim()) continue;
-      try {
-        handleEvent(JSON.parse(line));
-      } catch {
-        // Only normalized provider events are shown in the runtime UI.
+  let interrupted = false;
+  try {
+    while (activeRun?.runId === run.id && !activeRun.stopRequested) {
+      const iterationNumber = run.iterations.length + 1;
+      const result = await runWorkerIteration(iterationNumber);
+      run.sessionId = result.discoveredSessionId;
+      run.summary = result.finalSummary || result.failure || run.summary;
+
+      if (result.interrupted || activeRun?.stopRequested) {
+        interrupted = true;
+        run.status = "interrupted";
+        break;
       }
+      if (result.failure) {
+        run.status = "failed";
+        break;
+      }
+      if (!result.finalSummary.trim()) {
+        run.status = "failed";
+        run.summary =
+          "The worker ended without a durable iteration handoff, so Loopit stopped instead of launching an unobservable cycle.";
+        send({ type: "error", text: run.summary });
+        break;
+      }
+
+      const handoff = parseRuntimeHandoff(result.finalSummary);
+      run.iterations.push({
+        number: iterationNumber,
+        ...handoff,
+        startedAt: result.startedAt,
+        finishedAt: result.finishedAt,
+      });
+      publishActivity({
+        text: `Loop iteration ${iterationNumber} completed`,
+        detail: handoff.completed,
+        kind: "iteration",
+        status: "complete",
+      });
+      await writeRun(run);
+      send({ type: "iteration_completed", iteration: run.iterations.at(-1) });
+
+      if (handoff.outcome === "continue") {
+        run.currentIteration = iterationNumber + 1;
+        send({ type: "run_updated", run: publicRun(true) });
+        continue;
+      }
+
+      run.status = handoff.outcome === "complete" ? "completed" : "paused";
+      break;
     }
-  });
-
-  child.stderr.on("data", (chunk) => {
-    stderrBuffer = `${stderrBuffer}${chunk.toString()}`.slice(-12_000);
-  });
-
-  child.on("error", (error) => {
-    providerError = `${invocation.command} could not be started: ${error.message}`;
-    send({ type: "error", text: providerError });
-  });
-
-  child.on("close", async (code, signal) => {
-    activeRun = null;
-    const interrupted = signal === "SIGTERM";
-    const failure =
-      providerError ||
-      (code && code !== 0
-        ? stderrBuffer.trim().split("\n").slice(-3).join("\n") ||
-          `${invocation.command} exited with code ${code}.`
-        : "");
-    run.status = interrupted ? "interrupted" : failure ? "failed" : "paused";
-    run.finishedAt = new Date().toISOString();
-    run.sessionId = discoveredSessionId;
+  } catch (error) {
+    run.status = "failed";
     run.summary =
-      finalSummary ||
-      failure ||
-      (interrupted
-        ? "The worker was stopped by the user. Durable project artifacts remain available for a later resume."
-        : "The worker turn ended. Inspect the durable artifacts before resuming runtime.");
-    await writeRun(run);
-    const publicRun = {
-      id: run.id,
-      loopRevision: run.loopRevision,
-      agent: run.agent,
-      active: false,
-      status: run.status,
-      startedAt: run.startedAt,
-      finishedAt: run.finishedAt,
-      summary: run.summary,
-      activities: run.activities,
-    };
-    send({ type: "run_updated", run: publicRun });
-    send({ type: "done", interrupted });
-    response.end();
-  });
+      error instanceof Error ? error.message : "The continuous runtime failed.";
+    send({ type: "error", text: run.summary });
+  }
+
+  if (run.status === "running") {
+    interrupted = true;
+    run.status = "interrupted";
+  }
+  run.finishedAt = new Date().toISOString();
+  if (interrupted && !run.summary) {
+    run.summary =
+      "The loop was stopped by the user. Completed iterations and durable project artifacts remain available for a later run.";
+  }
+  activeRun = null;
+  await writeRun(run);
+  send({ type: "run_updated", run: publicRun(false) });
+  send({ type: "done", interrupted });
+  if (!response.destroyed) response.end();
 }
 
 const server = http.createServer(async (request, response) => {
@@ -1650,7 +1767,8 @@ const server = http.createServer(async (request, response) => {
         json(response, 200, { interrupted: false });
         return;
       }
-      activeRun.child.kill("SIGTERM");
+      activeRun.stopRequested = true;
+      activeRun.child?.kill("SIGTERM");
       json(response, 200, { interrupted: true });
       return;
     }

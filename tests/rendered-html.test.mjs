@@ -109,6 +109,10 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.match(studio, /Retry test/);
   assert.match(studio, /runtime-launch/);
   assert.match(studio, /Continuous runtime/);
+  assert.match(studio, /Loop progress/);
+  assert.match(studio, /Iteration completed/);
+  assert.match(studio, /runtimeIterations/);
+  assert.match(studio, /will start the next worker automatically/);
   assert.match(studio, /Live agent activity/);
   assert.match(studio, /Construction agent activity/);
   assert.match(studio, /Loop test activity/);

@@ -95,11 +95,24 @@ interface RuntimeRun {
   loopRevision: number | null;
   agent: AgentName;
   active: boolean;
-  status: "running" | "paused" | "failed" | "interrupted";
+  status: "running" | "paused" | "completed" | "failed" | "interrupted";
   startedAt: string | null;
   finishedAt: string | null;
+  currentIteration?: number | null;
+  iterations?: RuntimeIteration[];
   summary: string;
   activities?: ActivityEntry[];
+}
+
+interface RuntimeIteration {
+  number: number;
+  outcome: "continue" | "pause" | "complete";
+  state: string;
+  completed: string;
+  next: string;
+  reason: string;
+  startedAt: string | null;
+  finishedAt: string | null;
 }
 
 interface WiringTestStep {
@@ -1502,6 +1515,20 @@ export function LoopStudio({
   }, [isRuntimeRunning, runtimeRun?.id]);
 
   useEffect(() => {
+    if (!isRuntimeRunning) return;
+    const pollRuntime = async () => {
+      const response = await fetch(`${DAEMON_URL}/api/run`).catch(() => null);
+      if (!response?.ok) return;
+      const payload = (await response.json()) as { run: RuntimeRun | null };
+      if (!payload.run) return;
+      setRuntimeRun(payload.run);
+      setRuntimeActivities(payload.run.activities ?? []);
+    };
+    const timer = window.setInterval(() => void pollRuntime(), 2000);
+    return () => window.clearInterval(timer);
+  }, [isRuntimeRunning, runtimeRun?.id]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, activity]);
 
@@ -1924,6 +1951,9 @@ export function LoopStudio({
           : runtimeFinishedAt) - runtimeStartedAt,
       )
     : 0;
+  const runtimeIterations = runtimeRun?.iterations ?? [];
+  const currentRuntimeIteration =
+    runtimeRun?.currentIteration ?? runtimeIterations.length + 1;
   const testPanelLabel = isUnifiedTestRunning
     ? TEST_STAGE_LABEL[unifiedTestStage]
     : testPassed
@@ -2402,7 +2432,7 @@ ${exactTraceFindings}`;
       return;
     }
     setRuntimeError(null);
-    setRuntimeActivity("Starting the first loop worker");
+    setRuntimeActivity("Starting continuous runtime");
     setRuntimeActivities([]);
 
     try {
@@ -2443,6 +2473,12 @@ ${exactTraceFindings}`;
           }
           if (event.type === "agent_message") {
             setRuntimeActivity("Worker report saved");
+          }
+          if (event.type === "iteration_completed") {
+            const iteration = event.iteration as RuntimeIteration;
+            setRuntimeActivity(
+              `Loop iteration ${iteration.number} completed · starting ${iteration.next}`,
+            );
           }
           if (event.type === "error") {
             setRuntimeError(event.text);
@@ -3242,7 +3278,7 @@ ${exactTraceFindings}`;
                 <header>
                   <div>
                     <span className="eyebrow">Runtime</span>
-                    <h3>Start the loop</h3>
+                    <h3>{isRuntimeRunning ? "Loop is running" : "Start the loop"}</h3>
                   </div>
                   <div className="runtime-header-state">
                     <div className="runtime-clock">
@@ -3258,7 +3294,11 @@ ${exactTraceFindings}`;
                       </time>
                     </div>
                     <span>
-                      {isRuntimeRunning ? "Running" : canStartRuntime ? "Ready" : "Locked"}
+                      {isRuntimeRunning
+                        ? `Iteration ${currentRuntimeIteration}`
+                        : canStartRuntime
+                          ? "Ready"
+                          : "Locked"}
                     </span>
                   </div>
                 </header>
@@ -3277,7 +3317,7 @@ ${exactTraceFindings}`;
                     </strong>
                     <p>
                       {isRuntimeRunning
-                        ? "A separate local worker is following the tested loop and writing durable project artifacts."
+                        ? `${runtimeIterations.length} loop ${runtimeIterations.length === 1 ? "iteration" : "iterations"} completed. Loopit will start the next worker automatically unless a real boundary is reached.`
                         : health?.ok !== true
                           ? "Runtime stays locked until the local daemon identifies the repository the agent will modify."
                           : health.runtimeAllowed === false
@@ -3311,6 +3351,58 @@ ${exactTraceFindings}`;
                     </button>
                   )}
                 </div>
+                {(isRuntimeRunning || runtimeIterations.length > 0) && (
+                  <section className="runtime-iterations" aria-label="Completed loop iterations">
+                    <header>
+                      <div>
+                        <strong>Loop progress</strong>
+                        <span>
+                          {runtimeIterations.length} completed
+                          {isRuntimeRunning && ` · iteration ${currentRuntimeIteration} running`}
+                        </span>
+                      </div>
+                      <i aria-hidden="true">↺</i>
+                    </header>
+                    <ol>
+                      {isRuntimeRunning && (
+                        <li className="is-running">
+                          <span>{currentRuntimeIteration}</span>
+                          <div>
+                            <header>
+                              <small>Current iteration</small>
+                              <em>Running</em>
+                            </header>
+                            <strong>{runtimeActivity}</strong>
+                            <p>Following the latest durable state and next work.</p>
+                          </div>
+                        </li>
+                      )}
+                      {[...runtimeIterations].reverse().map((iteration) => (
+                        <li className={`is-${iteration.outcome}`} key={iteration.number}>
+                          <span>{iteration.number}</span>
+                          <div>
+                            <header>
+                              <small>Iteration completed</small>
+                              <em>
+                                {iteration.outcome === "continue"
+                                  ? "Continuing"
+                                  : iteration.outcome === "complete"
+                                    ? "Objective complete"
+                                    : "Paused"}
+                              </em>
+                            </header>
+                            <strong>{iteration.completed}</strong>
+                            <p>
+                              <b>Next</b>
+                              {iteration.next}
+                            </p>
+                            <small>Next state · {iteration.state}</small>
+                          </div>
+                        </li>
+                      ))}
+                    </ol>
+                  </section>
+                )}
                 {runtimeActivities.length > 0 && (
                   <div className="runtime-activity-monitor">
                     <div>
@@ -3333,7 +3425,7 @@ ${exactTraceFindings}`;
                 {runtimeRun && runtimeRun.status !== "running" && (
                   <details className="runtime-last-run">
                     <summary>
-                      Last worker turn · {runtimeRun.status}
+                      Continuous run · {runtimeRun.status}
                       {runtimeRun.loopRevision !== loop.revision && " · older revision"}
                     </summary>
                     <p>{runtimeRun.summary}</p>

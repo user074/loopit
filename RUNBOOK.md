@@ -1,6 +1,6 @@
 # Running Loopit locally
 
-This runbook covers the construction gate and first local runtime worker. Loopit separates two repositories:
+This runbook covers the construction gate and minimal continuous local runtime. Loopit separates two repositories:
 
 - The **Loopit repository** contains only the control-plane application.
 - The **target project** contains the work, its `.loopit` definition and history, and every file a runtime worker may modify.
@@ -73,7 +73,7 @@ Stopping Loopit preserves these files in the target project when they have been 
 - `.loopit/session.json`, the active-conversation pointer and resumable local-agent session identifiers.
 - `.loopit/conversations/*.md`, the readable local conversation histories shown after a page reload or selected from **History**.
 - `.loopit/test-report.md`, the latest fresh-agent rehearsal report.
-- `.loopit/runs/*.md`, readable records of local worker turns.
+- `.loopit/runs/*.md`, readable continuous-run records with each completed iteration, completed work, next state, next work, activity, and latest worker report.
 
 Use **New** in the conversation header to start an empty conversation with a fresh Codex or Claude session. The current conversation moves into **History** rather than being destroyed. Selecting a past conversation restores both its visible messages and its own local-agent session. Conversation switching does not delete or replace `.loopit/loop.md`; all conversations in the project discuss the same current loop definition.
 
@@ -87,7 +87,7 @@ The separate **Test this loop** section follows structural checks and presents o
 
 Parser and schema repair never belongs to the human. Construction-agent output is constrained before Loopit writes Markdown, including required IDs and the allowed Role, state Kind, boundary Kind, and transition Kind values. Human review opens only when the test report contains a structured question about human-owned intent, authority, private facts, cost, policy, or risk, together with the exact context and consequence.
 
-Passed unlocks **Start loop** at the bottom of the right panel only when the target is separate from the Loopit repository. Start launches a local worker with the target project as its working directory; it does not reuse the construction conversation. The worker may modify target-project files while following the tested loop, but it may not redesign `.loopit/loop.md` or modify the Loopit control-plane repository. The Runtime section shows a live feed of commands, reads, edits, tools, and planning events from Codex or Claude. That feed and the worker report are saved in the run Markdown. The Continuous runtime clock counts the uninterrupted wall-clock interval during which that worker process is active and freezes when the process pauses, fails, completes, or is stopped.
+Passed unlocks **Start loop** at the bottom of the right panel only when the target is separate from the Loopit repository. Start launches a local worker with the target project as its working directory; it does not reuse the construction conversation. Each worker completes one ordinary recurrence, integrates its evidence into durable project artifacts, and reports Completed, Next, State, and Continue/Pause/Complete in Markdown. A Continue handoff starts the next fresh worker automatically. A Pause handoff is valid only for a declared human decision, permission, budget, scheduled observation, or unrecoverable blocker; Complete requires the loop's configured acceptance policy. The Runtime section shows completed iterations plus a live feed of commands, reads, edits, tools, and planning events. The continuous clock spans the full chain and freezes when the runtime pauses, fails, completes, is interrupted, or the user presses **Stop loop**.
 
 ## If the original terminal is gone
 
