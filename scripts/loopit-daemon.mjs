@@ -39,6 +39,12 @@ const appRoot = await realpath(requestedAppRoot).catch(() => requestedAppRoot);
 const projectRoot = await realpath(requestedProjectRoot).catch(
   () => requestedProjectRoot,
 );
+const constructionSchemaPath = path.join(
+  appRoot,
+  "schemas",
+  "loop-construction-output.schema.json",
+);
+const constructionOutputSchema = await readFile(constructionSchemaPath, "utf8");
 function containsPath(parent, candidate) {
   const relative = path.relative(parent, candidate);
   return (
@@ -296,6 +302,14 @@ function runPath(id) {
 }
 
 function serializeRunMarkdown(run) {
+  const activities = (run.activities ?? []).length
+    ? run.activities
+        .map(
+          (entry) =>
+            `- ${entry.at} — ${entry.text}${entry.detail ? ` — ${entry.detail}` : ""}`,
+        )
+        .join("\n")
+    : "_No activity recorded._";
   return `---
 loopit-run: 1
 run-id: ${run.id}
@@ -312,6 +326,10 @@ session-id: ${run.sessionId ?? ""}
 ## Objective
 
 ${run.objective}
+
+## Activity
+
+${activities}
 
 ## Worker report
 
@@ -341,6 +359,23 @@ async function readLatestRunOrNull() {
     }
   }
   const report = markdown.match(/\n## Worker report\s*\n\n([\s\S]*)$/)?.[1]?.trim();
+  const activitySection = markdown.match(
+    /\n## Activity\s*\n\n([\s\S]*?)(?=\n## Worker report)/,
+  )?.[1];
+  const activities = (activitySection ?? "")
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("- "))
+    .map((line, index) => {
+      const [at = "", text = "", ...detail] = line.slice(2).split(" — ");
+      return {
+        id: `${values["run-id"] ?? latest}-${index}`,
+        at,
+        text,
+        detail: detail.join(" — ") || null,
+        kind: "activity",
+        status: "complete",
+      };
+    });
   return {
     id: values["run-id"] ?? latest.slice(0, -3),
     loopRevision: Number(values["loop-revision"]) || null,
@@ -349,6 +384,7 @@ async function readLatestRunOrNull() {
     startedAt: values["started-at"] ?? null,
     finishedAt: values["finished-at"] || null,
     summary: report ?? "",
+    activities,
   };
 }
 
@@ -401,9 +437,9 @@ function constructionPrompt({ message, selectedElementId }) {
 
   return `You are the loop-construction supervisor inside Loopit.
 
-Your only task is to help the user construct and debug a minimal continuing-work loop. You may inspect this repository and its README for context. You MUST only create or update .loopit/loop.md. Do not modify application code, documentation, configuration, or any other file. Do not execute the proposed loop.
+Your only task is to help the user construct and debug a minimal continuing-work loop. You may inspect this repository and its README for context. Work read-only: do not modify .loopit/loop.md or any project file, and do not execute the proposed loop. Return only the structured response required by the supplied output schema. Loopit validates that response and serializes the loop into canonical Markdown itself, so enum values, IDs, and required fields cannot drift into an unparseable document.
 
-If .loopit/loop.md does not exist, this is first-time initialization. Do not treat the missing file as an error. If the user has not stated a concrete objective yet, ask one focused question about what work they want to keep progressing; do not invent or create a loop prematurely. Once the objective is clear enough, create the smallest useful proposal.
+If .loopit/loop.md does not exist, this is first-time initialization. Do not treat the missing file as an error. If the user has not stated a concrete objective yet, return action "ask", one focused question in message, and null loop; do not invent a loop prematurely. Once the objective is clear enough, return action "update", a complete loop object, and a concise explanation in message. Return action "no-change" and null loop when the user only needs an explanation and no durable change is needed.
 
 Before drafting, explicitly distinguish two things:
 - The product, system, organization, or outcome being described.
@@ -413,7 +449,7 @@ Classify the loop subject before choosing states. If the user says build, create
 
 An operating loop is appropriate only when the user explicitly asks to operate an existing system or makes that intent otherwise unambiguous. If build and operate are both genuinely plausible and the distinction would change the phases or deliverables, ask exactly one focused question before writing: whether the loop should build and improve the system or operate it after it exists. If the user wants both, keep them as separate loops and construct development first unless the user prioritizes operation.
 
-When a loop exists, read .loopit/loop.md before responding. Markdown is the only durable source of truth; never create a JSON copy. Preserve its constrained, readable structure:
+When a loop exists, read .loopit/loop.md before responding. Markdown remains the only durable source of truth; the structured response is a transient machine handoff and is never stored as a second loop definition. Populate the schema fields so Loopit can preserve this constrained, readable structure:
 - YAML front matter with loopit, revision, status, completion-policy, and start.
 - One H1 loop name and an H2 Objective.
 - One H2 Starting Package immediately after Objective. It contains exactly four H3 entries with bold ID, Role, and Description fields plus an H4 Initial Contents list. Allowed roles are state, frontier, foundation, and first-work.
@@ -425,7 +461,9 @@ When a loop exists, read .loopit/loop.md before responding. Markdown is the only
 - Transitions use the existing four-column Markdown table: Next state, When, Kind, and ID.
 - Allowed state kinds: observe, decide, act, evaluate, challenge, update, interrupt, terminal.
 - Allowed transition kinds: normal, continue, interrupt, complete.
-- Increment revision after a meaningful change.
+- Use only the exact enum values declared by the output schema. Never put descriptive words such as authoritative, approval, retry, success, or failure into a Kind or Role field.
+- Supply a stable non-empty ID for every starting item, artifact, boundary, state, and transition. IDs are machine references; names and descriptions carry the human language.
+- Revision is machine-managed by Loopit after a meaningful change; copy the current revision when one exists.
 
 Construction principles:
 1. Keep the loop as small as possible.
@@ -451,7 +489,7 @@ Construction principles:
 16. Propose the best concrete loop rather than asking the human to design it manually. State the classified loop subject in the response. Ask a focused question only when the missing choice would materially change its subject, Starting Package, phases, deliverables, authority, or result contract. Explain the proposed cycle in one short project-specific sequence so the human can correct it.
 17. Choose one completion policy and record it in front matter: \`confirm\` by default for product and engineering work, \`automatic\` only when declared evidence can decide safely, or \`continuous\` for open-ended work that replenishes its frontier. Challenge and acceptance are invoked by the runtime only when integration produces a completion candidate; they do not need permanent domain states.
 18. Never claim hypothetical runtime evidence already exists. Record how the domain result would carry it and let a later sandbox test prove it.
-19. After editing the file, respond conversationally with the loop subject, the profession-named starting work, separately specified setup, recognizable recurring cycle, native deliverable, source of new work, and the most important remaining uncertainty. Use the profession's vocabulary rather than the engine terms Starting Package, state, frontier, foundation, Work contract, or Result package unless the user explicitly asks about Loopit's internal model. Do not repeat invented terms from IDs or internal descriptions. Keep the reply concise.
+19. In the structured message field, respond conversationally with the loop subject, the profession-named starting work, separately specified setup, recognizable recurring cycle, native deliverable, source of new work, and the most important remaining uncertainty. Use the profession's vocabulary rather than the engine terms Starting Package, state, frontier, foundation, Work contract, or Result package unless the user explicitly asks about Loopit's internal model. Do not repeat invented terms from IDs or internal descriptions. Keep the reply concise.
 
 ${selected}
 
@@ -466,12 +504,14 @@ function commandFor(agent, sessionId, prompt) {
       "--verbose",
       "--output-format",
       "stream-json",
+      "--json-schema",
+      constructionOutputSchema,
       "--permission-mode",
-      "acceptEdits",
+      "plan",
       "--allowedTools",
-      "Read,Glob,Grep,Edit,Write",
+      "Read,Glob,Grep",
       "--disallowedTools",
-      "Bash",
+      "Bash,Edit,Write",
     ];
     if (sessionId) args.push("--resume", sessionId);
     return { command: "claude", args, input: prompt };
@@ -484,7 +524,17 @@ function commandFor(agent, sessionId, prompt) {
   if (sessionId) {
     return {
       command: "codex",
-      args: ["exec", "resume", "--json", ...modelArgs, sessionId, "-"],
+      args: [
+        "exec",
+        "resume",
+        "--json",
+        "--skip-git-repo-check",
+        "--output-schema",
+        constructionSchemaPath,
+        ...modelArgs,
+        sessionId,
+        "-",
+      ],
       input: prompt,
     };
   }
@@ -494,9 +544,12 @@ function commandFor(agent, sessionId, prompt) {
     args: [
       "exec",
       "--json",
+      "--skip-git-repo-check",
+      "--output-schema",
+      constructionSchemaPath,
       ...modelArgs,
       "--sandbox",
-      "workspace-write",
+      "read-only",
       "-C",
       projectRoot,
       "-",
@@ -535,6 +588,7 @@ function rehearsalCommandFor(agent, prompt) {
       "exec",
       "--json",
       "--ephemeral",
+      "--skip-git-repo-check",
       ...modelArgs,
       "--sandbox",
       "read-only",
@@ -574,6 +628,7 @@ function runtimeCommandFor(agent, prompt) {
     args: [
       "exec",
       "--json",
+      "--skip-git-repo-check",
       ...modelArgs,
       "--sandbox",
       "workspace-write",
@@ -635,6 +690,7 @@ Name exact state IDs and transition IDs. PASS completes "Test this loop" for the
 
 When Ask human is not None, make that subsection directly renderable as a decision panel using exactly this structure:
 ### Ask human
+Context: the exact state, artifact, evidence gap, and consequence that caused this decision to appear
 Question: one focused question the user can answer now
 Recommendation: the safest useful default and why it is preferred
 Why human: the intent, authority, private fact, cost, or risk judgment the agent cannot own
@@ -642,7 +698,7 @@ Options:
 - the recommended concrete option, matching the Recommendation
 - one concrete alternative
 
-Do not hide a required human decision in another section or in conversational prose. When Ask human is None, write only "### Ask human" followed by "None."`;
+Parser errors, schema fields, IDs, Kind values, Markdown formatting, validator wording, and deterministic trace findings are always agent-owned; never ask the human to choose how to repair them. Do not hide a required human decision in another section or in conversational prose. When Ask human is None, write only "### Ask human" followed by "None."`;
 }
 
 function rehearsalVerdict(report) {
@@ -667,33 +723,194 @@ function readableProviderError(event, agent) {
   return raw;
 }
 
-function eventLabel(event) {
+function activityDetail(value, limit = 180) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return null;
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+}
+
+function visibleProjectPath(value) {
+  if (!value) return null;
+  const absolute = path.resolve(projectRoot, String(value));
+  const relative = path.relative(projectRoot, absolute);
+  return relative && !relative.startsWith("..") ? relative : String(value);
+}
+
+function codexActivity(event, purpose) {
+  if (event.type !== "item.started" && event.type !== "item.completed") {
+    return null;
+  }
   const item = event.item;
   if (!item) return null;
+  const complete = event.type === "item.completed";
+  const status = complete ? "complete" : "active";
 
   if (item.type === "command_execution") {
-    return item.status === "in_progress"
-      ? "Inspecting the project"
-      : "Project inspection finished";
+    const label =
+      purpose === "runtime"
+        ? complete
+          ? "Project command finished"
+          : "Running project command"
+        : complete
+          ? "Project inspection finished"
+          : "Inspecting project files";
+    return {
+      text: label,
+      detail: activityDetail(item.command),
+      kind: "command",
+      status,
+    };
   }
-  if (item.type === "file_change") return "Updating the loop proposal";
-  if (item.type === "mcp_tool_call") return "Reading project context";
-  if (item.type === "reasoning") return "Reconsidering the loop structure";
+  if (item.type === "file_change") {
+    const files = (item.changes ?? [])
+      .map((change) => visibleProjectPath(change.path ?? change.file_path))
+      .filter(Boolean)
+      .join(", ");
+    return {
+      text: complete ? "Project files updated" : "Updating project files",
+      detail: activityDetail(files),
+      kind: "write",
+      status,
+    };
+  }
+  if (item.type === "mcp_tool_call") {
+    return {
+      text: complete ? "Connected tool finished" : "Using a connected tool",
+      detail: activityDetail(item.tool ?? item.name ?? item.server),
+      kind: "tool",
+      status,
+    };
+  }
+  if (item.type === "reasoning") {
+    return {
+      text:
+        purpose === "runtime"
+          ? "Planning the next loop step"
+          : purpose === "test"
+            ? "Evaluating the loop contract"
+            : "Designing the loop structure",
+      detail: null,
+      kind: "reasoning",
+      status,
+    };
+  }
   return null;
 }
 
-function runtimeEventLabel(event) {
-  const item = event.item;
-  if (!item) return null;
-  if (item.type === "command_execution") {
-    return item.status === "in_progress"
-      ? "Running project work"
-      : "Project command finished";
+function claudeToolActivity(tool, purpose) {
+  const input = tool?.input ?? {};
+  const name = String(tool?.name ?? "tool");
+  const projectPath = visibleProjectPath(input.file_path ?? input.path);
+  if (/^read$/i.test(name)) {
+    return { text: "Reading project file", detail: projectPath, kind: "read" };
   }
-  if (item.type === "file_change") return "Updating project artifacts";
-  if (item.type === "mcp_tool_call") return "Using a connected tool";
-  if (item.type === "reasoning") return "Planning the next loop step";
-  return null;
+  if (/^(edit|write|notebookedit)$/i.test(name)) {
+    return {
+      text: /^write$/i.test(name) ? "Writing project file" : "Editing project file",
+      detail: projectPath,
+      kind: "write",
+    };
+  }
+  if (/^glob$/i.test(name)) {
+    return {
+      text: "Finding project files",
+      detail: activityDetail(input.pattern),
+      kind: "read",
+    };
+  }
+  if (/^grep$/i.test(name)) {
+    return {
+      text: "Searching project files",
+      detail: activityDetail(input.pattern),
+      kind: "read",
+    };
+  }
+  if (/^bash$/i.test(name)) {
+    return {
+      text: purpose === "runtime" ? "Running project command" : "Inspecting project",
+      detail: activityDetail(input.command),
+      kind: "command",
+    };
+  }
+  return {
+    text: `Using ${name}`,
+    detail: activityDetail(projectPath ?? input.query ?? input.pattern),
+    kind: "tool",
+  };
+}
+
+function parseConstructionResult(value) {
+  if (value && typeof value === "object") return value;
+  if (typeof value !== "string" || !value.trim()) return null;
+  const source = value
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "");
+  return JSON.parse(source);
+}
+
+function rawLoopRevision(source) {
+  const value = source?.match(/^revision:\s*(\d+)\s*$/m)?.[1];
+  return Number(value) || 0;
+}
+
+async function applyConstructionResult(result) {
+  if (!result || typeof result !== "object") {
+    throw new Error("The construction agent did not return a structured result.");
+  }
+  if (!["ask", "update", "no-change"].includes(result.action)) {
+    throw new Error("The construction result has an invalid action.");
+  }
+  const message = String(result.message || "").trim();
+  if (!message) throw new Error("The construction result is missing its message.");
+
+  if (result.action !== "update") {
+    if (result.loop !== null) {
+      throw new Error(`Construction action ${result.action} must not include a loop.`);
+    }
+    return { message, loop: await readLoopOrNull(), changed: false };
+  }
+  if (!result.loop || typeof result.loop !== "object") {
+    throw new Error("Construction action update must include a complete loop.");
+  }
+
+  const currentSource = await readFile(loopPath, "utf8").catch((error) => {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  });
+  let currentLoop = null;
+  if (currentSource) {
+    try {
+      currentLoop = parseLoopMarkdown(currentSource);
+    } catch {
+      // A structured update is also the recovery path for an older invalid file.
+    }
+  }
+  const previousRevision = currentLoop?.revision ?? rawLoopRevision(currentSource);
+  const comparisonRevision = Math.max(1, previousRevision || 1);
+  const candidateForComparison = {
+    ...result.loop,
+    schemaVersion: 1,
+    revision: comparisonRevision,
+  };
+  const comparisonMarkdown = serializeLoopMarkdown(candidateForComparison);
+  const candidateForWrite = parseLoopMarkdown(comparisonMarkdown);
+
+  if (
+    currentLoop &&
+    serializeLoopMarkdown(currentLoop) === serializeLoopMarkdown(candidateForWrite)
+  ) {
+    return { message, loop: currentLoop, changed: false };
+  }
+
+  const nextLoop = {
+    ...candidateForWrite,
+    revision: Math.max(1, previousRevision + 1),
+  };
+  const canonicalMarkdown = serializeLoopMarkdown(nextLoop);
+  const verifiedLoop = parseLoopMarkdown(canonicalMarkdown);
+  await writeText(loopPath, canonicalMarkdown);
+  return { message, loop: verifiedLoop, changed: true };
 }
 
 async function streamConstruction(request, response) {
@@ -749,7 +966,7 @@ async function streamConstruction(request, response) {
   let stdoutBuffer = "";
   let stderrBuffer = "";
   let discoveredSessionId = sessionId;
-  let finalMessageSent = false;
+  let constructionResultValue = null;
   let providerErrorSent = false;
 
   const handleEvent = async (event) => {
@@ -757,18 +974,10 @@ async function streamConstruction(request, response) {
       if (event.type === "thread.started" && event.thread_id) {
         discoveredSessionId = event.thread_id;
       }
-      const label = eventLabel(event);
-      if (label && event.type === "item.started") {
-        send({ type: "activity", text: label });
-      }
+      const progress = codexActivity(event, "construction");
+      if (progress) send({ type: "activity", ...progress });
       if (event.type === "item.completed" && event.item?.type === "agent_message") {
-        finalMessageSent = true;
-        send({ type: "agent_message", text: event.item.text });
-        void rememberConversation({
-          role: "agent",
-          source: agent,
-          text: event.item.text,
-        });
+        constructionResultValue = event.item.text;
       }
       if (event.type === "turn.failed") {
         providerErrorSent = true;
@@ -790,19 +999,18 @@ async function streamConstruction(request, response) {
     }
     if (event.type === "assistant") {
       const blocks = event.message?.content ?? [];
-      const tool = blocks.find((block) => block.type === "tool_use");
-      if (tool) send({ type: "activity", text: `Using ${tool.name}` });
+      blocks
+        .filter((block) => block.type === "tool_use")
+        .forEach((tool) =>
+          send({
+            type: "activity",
+            ...claudeToolActivity(tool, "construction"),
+            status: "active",
+          }),
+        );
     }
     if (event.type === "result") {
-      if (event.result) {
-        finalMessageSent = true;
-        send({ type: "agent_message", text: event.result });
-        void rememberConversation({
-          role: "agent",
-          source: agent,
-          text: event.result,
-        });
-      }
+      constructionResultValue = event.structured_output ?? event.result ?? null;
       if (event.is_error) {
         providerErrorSent = true;
         const text = readableProviderError(event, agent);
@@ -864,24 +1072,32 @@ async function streamConstruction(request, response) {
       });
     }
 
-    try {
-      const loop = await readLoopOrNull();
-      if (loop) send({ type: "loop_updated", loop });
-    } catch (error) {
-      send({
-        type: "error",
-        text: `The loop Markdown could not be parsed: ${error instanceof Error ? error.message : "Unknown parsing error."}`,
-      });
-      void rememberConversation({
-        role: "error",
-        text: `The loop Markdown could not be parsed: ${error instanceof Error ? error.message : "Unknown parsing error."}`,
-      });
-    }
-    if (!finalMessageSent && code === 0) {
-      const text =
-        "The loop proposal was updated. Inspect the changed states and validation findings on the right.";
-      send({ type: "agent_message", text });
-      void rememberConversation({ role: "agent", source: agent, text });
+    if (code === 0 && signal !== "SIGTERM" && !providerErrorSent) {
+      try {
+        const structured = parseConstructionResult(constructionResultValue);
+        const applied = await applyConstructionResult(structured);
+        send({ type: "agent_message", text: applied.message });
+        await rememberConversation({
+          role: "agent",
+          source: agent,
+          text: applied.message,
+        });
+        if (applied.loop) send({ type: "loop_updated", loop: applied.loop });
+        if (applied.changed) {
+          send({
+            type: "activity",
+            text: `Saved canonical loop revision ${applied.loop.revision}`,
+            kind: "write",
+            status: "complete",
+          });
+        }
+      } catch (error) {
+        const text = `Loopit could not apply the agent's structured loop: ${
+          error instanceof Error ? error.message : "Unknown output error."
+        }`;
+        send({ type: "error", text });
+        await rememberConversation({ role: "error", text });
+      }
     }
     await conversationWriteQueue.catch(() => undefined);
     send({ type: "done", interrupted: signal === "SIGTERM" });
@@ -937,10 +1153,8 @@ async function streamRehearsal(request, response) {
 
   const handleEvent = (event) => {
     if (agent === "codex") {
-      const label = eventLabel(event);
-      if (label && event.type === "item.started") {
-        send({ type: "activity", text: label });
-      }
+      const progress = codexActivity(event, "test");
+      if (progress) send({ type: "activity", ...progress });
       if (event.type === "turn.failed" || event.type === "error") {
         providerErrorSent = true;
         const text = readableProviderError(event, agent);
@@ -952,8 +1166,15 @@ async function streamRehearsal(request, response) {
 
     if (event.type === "assistant") {
       const blocks = event.message?.content ?? [];
-      const tool = blocks.find((block) => block.type === "tool_use");
-      if (tool) send({ type: "activity", text: `Inspecting with ${tool.name}` });
+      blocks
+        .filter((block) => block.type === "tool_use")
+        .forEach((tool) =>
+          send({
+            type: "activity",
+            ...claudeToolActivity(tool, "test"),
+            status: "active",
+          }),
+        );
     }
     if (event.type === "result") {
       if (event.result) claudeReport = event.result;
@@ -1093,6 +1314,7 @@ async function streamRuntime(request, response) {
     finishedAt: null,
     sessionId: null,
     summary: "",
+    activities: [],
   };
   await writeRun(run);
 
@@ -1119,9 +1341,9 @@ async function streamRuntime(request, response) {
       startedAt: run.startedAt,
       finishedAt: null,
       summary: "",
+      activities: run.activities,
     },
   });
-  send({ type: "activity", text: "Starting the first loop worker" });
 
   const child = spawn(invocation.command, invocation.args, {
     cwd: projectRoot,
@@ -1129,7 +1351,31 @@ async function streamRuntime(request, response) {
     stdio: ["pipe", "pipe", "pipe"],
   });
   child.stdin.end(invocation.input);
-  activeRun = { child, agent, purpose: "runtime", runId: run.id };
+  activeRun = {
+    child,
+    agent,
+    purpose: "runtime",
+    runId: run.id,
+    activities: run.activities,
+  };
+
+  const publishActivity = (activity) => {
+    const entry = {
+      id: `${run.id}-activity-${run.activities.length + 1}`,
+      at: new Date().toISOString(),
+      text: activity.text,
+      detail: activity.detail ?? null,
+      kind: activity.kind ?? "activity",
+      status: activity.status ?? "active",
+    };
+    run.activities.push(entry);
+    send({ type: "activity", ...entry });
+  };
+  publishActivity({
+    text: "Starting the first loop worker",
+    detail: `Working in ${projectRoot}`,
+    kind: "start",
+  });
 
   let stdoutBuffer = "";
   let stderrBuffer = "";
@@ -1142,10 +1388,8 @@ async function streamRuntime(request, response) {
       if (event.type === "thread.started" && event.thread_id) {
         discoveredSessionId = event.thread_id;
       }
-      const label = runtimeEventLabel(event);
-      if (label && event.type === "item.started") {
-        send({ type: "activity", text: label });
-      }
+      const progress = codexActivity(event, "runtime");
+      if (progress) publishActivity(progress);
       if (event.type === "item.completed" && event.item?.type === "agent_message") {
         finalSummary = event.item.text;
         send({ type: "agent_message", text: finalSummary });
@@ -1162,8 +1406,14 @@ async function streamRuntime(request, response) {
     }
     if (event.type === "assistant") {
       const blocks = event.message?.content ?? [];
-      const tool = blocks.find((block) => block.type === "tool_use");
-      if (tool) send({ type: "activity", text: `Using ${tool.name}` });
+      blocks
+        .filter((block) => block.type === "tool_use")
+        .forEach((tool) =>
+          publishActivity({
+            ...claudeToolActivity(tool, "runtime"),
+            status: "active",
+          }),
+        );
     }
     if (event.type === "result") {
       if (event.result) {
@@ -1228,6 +1478,7 @@ async function streamRuntime(request, response) {
       startedAt: run.startedAt,
       finishedAt: run.finishedAt,
       summary: run.summary,
+      activities: run.activities,
     };
     send({ type: "run_updated", run: publicRun });
     send({ type: "done", interrupted });
@@ -1341,6 +1592,9 @@ const server = http.createServer(async (request, response) => {
           ? {
               ...run,
               active,
+              activities: active
+                ? activeRun.activities ?? run.activities ?? []
+                : run.activities ?? [],
               status: run.status === "running" && !active
                 ? "interrupted"
                 : run.status,

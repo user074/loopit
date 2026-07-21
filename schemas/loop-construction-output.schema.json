@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "action": {
+      "type": "string",
+      "enum": ["ask", "update", "no-change"]
+    },
+    "message": {
+      "type": "string"
+    },
+    "loop": {
+      "anyOf": [
+        { "$ref": "#/$defs/loop" },
+        { "type": "null" }
+      ]
+    }
+  },
+  "required": ["action", "message", "loop"],
+  "$defs": {
+    "startingPackageItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "role": {
+          "type": "string",
+          "enum": ["state", "frontier", "foundation", "first-work"]
+        },
+        "description": { "type": "string" },
+        "initialContents": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["id", "name", "role", "description", "initialContents"]
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" }
+      },
+      "required": ["id", "name", "description"]
+    },
+    "boundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "kind": {
+          "type": "string",
+          "enum": ["interrupt", "complete", "budget"]
+        },
+        "description": { "type": "string" }
+      },
+      "required": ["id", "name", "kind", "description"]
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "to": { "type": "string" },
+        "when": { "type": "string" },
+        "kind": {
+          "type": "string",
+          "enum": ["normal", "continue", "interrupt", "complete"]
+        }
+      },
+      "required": ["id", "to", "when", "kind"]
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "observe",
+            "decide",
+            "act",
+            "evaluate",
+            "challenge",
+            "update",
+            "interrupt",
+            "terminal"
+          ]
+        },
+        "summary": { "type": "string" },
+        "reads": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "instruction": { "type": "string" },
+        "writes": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "completion": { "type": "string" },
+        "transitions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/transition" }
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "summary",
+        "reads",
+        "instruction",
+        "writes",
+        "completion",
+        "transitions"
+      ]
+    },
+    "loop": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": { "type": "integer", "enum": [1] },
+        "revision": { "type": "integer", "minimum": 1 },
+        "name": { "type": "string" },
+        "objective": { "type": "string" },
+        "status": {
+          "type": "string",
+          "enum": ["draft", "confirmed"]
+        },
+        "completionPolicy": {
+          "type": "string",
+          "enum": ["confirm", "automatic", "continuous"]
+        },
+        "startState": { "type": "string" },
+        "startingPackage": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/startingPackageItem" }
+        },
+        "artifacts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/artifact" }
+        },
+        "boundaries": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/boundary" }
+        },
+        "states": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/state" }
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "revision",
+        "name",
+        "objective",
+        "status",
+        "completionPolicy",
+        "startState",
+        "startingPackage",
+        "artifacts",
+        "boundaries",
+        "states"
+      ]
+    }
+  }
+}

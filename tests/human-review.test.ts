@@ -15,6 +15,7 @@ test("structured human review becomes a focused decision", () => {
 None.
 
 ### Ask human
+Context: The loop reached the submission step, where an application would leave the local workspace under the user's identity.
 Question: Should real applications require individual approval?
 Recommendation: Require individual approval until the user explicitly delegates submission authority.
 Why human: This controls external actions taken in the user's name.
@@ -30,6 +31,7 @@ The submission boundary blocks unapproved actions.`,
 
   assert.ok(review);
   assert.equal(review.loopRevision, 4);
+  assert.match(review.context, /submission step/);
   assert.equal(
     review.question,
     "Should real applications require individual approval?",
@@ -38,21 +40,31 @@ The submission boundary blocks unapproved actions.`,
   assert.equal(review.recommendedDecision, review.options[0]);
 });
 
-test("a question from the repair agent is surfaced for an older report", () => {
+test("an agent question cannot turn a parser repair into human review", () => {
   const review = extractHumanReview(
     "## Ownership and next action\n- **Ask human:** None.",
-    "I fixed the agent-owned gaps. Should every application require approval, or may the assistant submit under pre-authorized rules?",
+    "Should the invalid transition kind be normal, or should it be authoritative?",
     4,
   );
 
-  assert.ok(review);
-  assert.match(review.question, /Should every application require approval/);
-  assert.deepEqual(review.options, [
-    "every application require approval",
-    "the assistant submit under pre-authorized rules",
-  ]);
-  assert.equal(review.recommendedDecision, review.options[0]);
-  assert.match(review.recommendation, /safe default/);
+  assert.equal(review, null);
+});
+
+test("a structured parser question remains agent-owned", () => {
+  const review = extractHumanReview(
+    `### Ask human
+Context: loop.md cannot be parsed.
+Question: Should this state kind be authoritative or complete?
+Recommendation: Use complete.
+Why human: The parser requires an allowed value.
+Options:
+- complete
+- interrupt`,
+    null,
+    4,
+  );
+
+  assert.equal(review, null);
 });
 
 test("no decision is invented when neither report nor agent asks one", () => {

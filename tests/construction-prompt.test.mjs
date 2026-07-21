@@ -74,11 +74,23 @@ test("rehearsal verifies that the starting package can actually begin", () => {
 
 test("rehearsal turns human-owned gaps into a decision panel contract", () => {
   assert.match(daemon, /make that subsection directly renderable as a decision panel/);
+  assert.match(daemon, /Context: the exact state, artifact, evidence gap, and consequence/);
   assert.match(daemon, /Question: one focused question the user can answer now/);
   assert.match(daemon, /Recommendation: the safest useful default/);
   assert.match(daemon, /Why human: the intent, authority, private fact, cost, or risk judgment/);
   assert.match(daemon, /Do not hide a required human decision/);
   assert.match(daemon, /open a human review with a recommended next step/);
+  assert.match(daemon, /Parser errors, schema fields, IDs, Kind values/);
+});
+
+test("construction uses a machine-constrained loop handoff", () => {
+  assert.match(daemon, /Return only the structured response required by the supplied output schema/);
+  assert.match(daemon, /Loopit validates that response and serializes the loop into canonical Markdown/);
+  assert.match(daemon, /"--json-schema"/);
+  assert.equal(daemon.match(/"--output-schema"/g)?.length, 2);
+  assert.match(daemon, /constructionSchemaPath/);
+  assert.match(daemon, /applyConstructionResult/);
+  assert.match(daemon, /"--sandbox",\s*"read-only"/);
 });
 
 test("construction testing has a reachable passed outcome", () => {
@@ -97,4 +109,16 @@ test("runtime is gated by the current passed revision and uses a separate worker
   assert.match(daemon, /mkdir\(runsDir/);
   assert.match(daemon, /activeRun\?\.purpose === "runtime"/);
   assert.match(daemon, /status: run\.status === "running" && !active/);
+  assert.match(daemon, /publishActivity/);
+  assert.match(daemon, /## Activity/);
+});
+
+test("Codex accepts explicitly selected projects before Git initialization", () => {
+  assert.equal(
+    daemon.match(/"--skip-git-repo-check"/g)?.length,
+    4,
+    "construction, resumed construction, rehearsal, and runtime must all accept a new project directory",
+  );
+  assert.match(daemon, /"--sandbox",\s*"workspace-write"/);
+  assert.match(daemon, /"--sandbox",\s*"read-only"/);
 });

@@ -81,10 +81,12 @@ Use **New** in the conversation header to start an empty conversation with a fre
 
 The separate **Test this loop** section follows structural checks and presents one bounded path to Passed:
 
-1. **Trace every path** animates one ordinary recurrence and every alternate transition. It fails when the cycle does not close, a transition is missing, or a structural check blocks continuation. This test is deterministic and does not start an agent.
-2. A fresh Codex or Claude session with no construction-chat context challenges state inputs, completion conditions, recovery paths, interrupts, and completion exits, then saves a Markdown report. It also verifies that a first draft or completed iteration cannot masquerade as project completion: candidate completion must follow the selected policy and, for human-confirmed or evidence-based completion, pass through a fresh challenger. The rehearsal cannot modify files or execute the proposed production work. If the result needs work, Loopit repairs agent-owned gaps and opens a focused right-panel review for missing human intent, permission, facts, thresholds, or policy, then retests automatically.
+1. **Trace every path** animates one ordinary recurrence and every alternate transition. It fails when the cycle does not close, a transition is missing, or a structural check blocks continuation. This test is deterministic and does not start an agent. When it fails, Loopit sends its exact findings directly to one repair turn and skips the unnecessary fresh rehearsal.
+2. Once the deterministic trace passes, a fresh Codex or Claude session with no construction-chat context challenges state inputs, completion conditions, recovery paths, interrupts, and completion exits, then saves a Markdown report. The rehearsal cannot modify files or execute the proposed production work. Loopit performs at most one automatic patch before stopping with a concrete audit; it does not create an open-ended sequence of revisions.
 
-Passed unlocks **Start loop** at the bottom of the right panel only when the target is separate from the Loopit repository. Start launches a local worker with the target project as its working directory; it does not reuse the construction conversation. The worker may modify target-project files while following the tested loop, but it may not redesign `.loopit/loop.md` or modify the Loopit control-plane repository. The Continuous runtime clock counts the uninterrupted wall-clock interval during which that worker process is active and freezes when the process pauses, fails, completes, or is stopped. Neither construction test substitutes for representative runtime evidence; the loop must specify how the worker collects that evidence and routes failures.
+Parser and schema repair never belongs to the human. Construction-agent output is constrained before Loopit writes Markdown, including required IDs and the allowed Role, state Kind, boundary Kind, and transition Kind values. Human review opens only when the test report contains a structured question about human-owned intent, authority, private facts, cost, policy, or risk, together with the exact context and consequence.
+
+Passed unlocks **Start loop** at the bottom of the right panel only when the target is separate from the Loopit repository. Start launches a local worker with the target project as its working directory; it does not reuse the construction conversation. The worker may modify target-project files while following the tested loop, but it may not redesign `.loopit/loop.md` or modify the Loopit control-plane repository. The Runtime section shows a live feed of commands, reads, edits, tools, and planning events from Codex or Claude. That feed and the worker report are saved in the run Markdown. The Continuous runtime clock counts the uninterrupted wall-clock interval during which that worker process is active and freezes when the process pauses, fails, completes, or is stopped.
 
 ## If the original terminal is gone
 
@@ -146,6 +148,10 @@ Check `http://127.0.0.1:4318/api/health` and look at the terminal that launched 
 ### Runtime says to choose a separate target project
 
 Loopit was launched with its own source repository as the target. Stop it, change to the repository the agent should modify, and run `loopit` there. Alternatively, restart from the Loopit repository with `npm run dev -- /absolute/path/to/your-project`.
+
+### Codex says the target is not a trusted directory
+
+Restart Loopit using the current launcher. Loopit explicitly selects the target project and allows Codex to work there even before `git init`, while retaining the role's read-only or workspace-write sandbox. If the message persists, confirm that an older daemon is not still listening on port 4318.
 
 ### `npm start` opens the UI but agent chat does not work
 

@@ -464,6 +464,66 @@ p {
   font-size: 12px;
 }
 
+.agent-activity-card {
+  padding: 10px 11px;
+  border: 1px solid #d9ddd8;
+  border-radius: 10px;
+  background: #fafaf8;
+}
+
+.activity-feed {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.activity-entry {
+  display: grid;
+  grid-template-columns: 17px minmax(0, 1fr);
+  gap: 6px;
+  min-width: 0;
+  color: #56615b;
+}
+
+.activity-entry > span {
+  display: grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #edf0ec;
+  color: #617068;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.activity-entry.is-active > span {
+  background: var(--green-soft);
+  color: var(--green);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.activity-entry strong,
+.activity-entry small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-entry strong {
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.activity-entry small {
+  margin-top: 1px;
+  color: #7a837e;
+  font-size: 8px;
+  line-height: 1.4;
+}
+
 .pulse-dot {
   width: 8px;
   height: 8px;
@@ -627,13 +687,14 @@ p {
 }
 
 .human-review-question {
-  margin-top: 17px;
+  margin-top: 10px;
   padding: 13px 14px;
   border-left: 3px solid var(--amber);
   background: var(--amber-soft);
 }
 
 .human-review-question span,
+.human-review-context span,
 .human-review-recommendation span,
 .human-review-options > span {
   display: block;
@@ -643,6 +704,21 @@ p {
   font-weight: 800;
   letter-spacing: 0.07em;
   text-transform: uppercase;
+}
+
+.human-review-context {
+  margin-top: 17px;
+  padding: 11px 13px;
+  border: 1px solid #e0e3de;
+  border-radius: 9px;
+  background: #f8f8f5;
+}
+
+.human-review-context p {
+  margin: 0;
+  color: #536059;
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .human-review-question strong {
@@ -2345,13 +2421,21 @@ p {
 }
 
 .agent-test-running {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
   gap: 10px;
   padding: 10px;
   border: 1px solid #cddbd2;
   border-radius: 9px;
   background: white;
+}
+
+.agent-test-running > .activity-feed {
+  grid-column: 1 / -1;
+  width: 100%;
+  padding-top: 7px;
+  border-top: 1px solid #e5e8e3;
 }
 
 .agent-test-running strong {
@@ -2617,6 +2701,30 @@ p {
 .runtime-launch-body button {
   flex: none;
   min-width: 110px;
+}
+
+.runtime-activity-monitor {
+  margin: 0 18px 16px;
+  padding: 11px 12px;
+  border: 1px solid #dce0db;
+  border-radius: 9px;
+  background: #fafaf8;
+}
+
+.runtime-activity-monitor > div:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.runtime-activity-monitor > div:first-child strong {
+  font-size: 10px;
+}
+
+.runtime-activity-monitor > div:first-child span {
+  color: var(--muted);
+  font-size: 8px;
 }
 
 .runtime-error {

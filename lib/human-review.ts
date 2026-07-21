@@ -1,6 +1,7 @@
 export interface HumanReviewRequest {
   key: string;
   loopRevision: number;
+  context: string;
   question: string;
   recommendation: string;
   recommendedDecision: string | null;
@@ -43,26 +44,35 @@ function questionOptions(question: string) {
 
 export function extractHumanReview(
   report: string,
-  agentMessage: string | null,
+  _agentMessage: string | null,
   loopRevision: number,
 ): HumanReviewRequest | null {
   const section =
     report.match(
       /(?:^|\n)###\s+Ask human\s*\n([\s\S]*?)(?=\n#{2,3}\s|$)/i,
     )?.[1] ?? "";
-  const inlineAsk =
-    report.match(/(?:^|\n)\s*[-*]\s+\*\*Ask human:\*\*\s*(.+)/i)?.[1] ??
-    "";
   const structuredQuestion = reportField(section, "Question");
-  const fallbackQuestion = agentMessage ? lastQuestion(agentMessage) : "";
-  const inlineQuestion = /^(?:none|none\.)$/i.test(inlineAsk.trim())
-    ? ""
-    : inlineAsk.trim();
-  const question = structuredQuestion || inlineQuestion || fallbackQuestion;
+  const question = structuredQuestion;
   if (!question) return null;
 
+  const context = reportField(section, "Context");
   const recommendation = reportField(section, "Recommendation");
   const whyHuman = reportField(section, "Why human");
+  const ownershipText = `${question} ${context} ${recommendation} ${whyHuman}`;
+  if (
+    /parser|parsing|markdown|schema|required field|allowed value|enum|state kind|transition kind|structural trace|validator/i.test(
+      ownershipText,
+    )
+  ) {
+    return null;
+  }
+  if (
+    !/intent|permission|authority|private|sensitive|credential|cost|budget|risk|policy|threshold|external action|user['’]s name/i.test(
+      whyHuman,
+    )
+  ) {
+    return null;
+  }
   const optionsBlock = section.match(
     /(?:^|\n)\s*(?:[-*]\s*)?(?:\*\*)?Options(?:\*\*)?\s*:\s*\n([\s\S]*?)$/i,
   )?.[1];
@@ -82,6 +92,9 @@ export function extractHumanReview(
   return {
     key: `${loopRevision}-${question}`,
     loopRevision,
+    context:
+      context ||
+      `The loop reached a decision that it cannot safely derive from project evidence. ${whyHuman}`,
     question,
     recommendation: visibleRecommendation,
     recommendedDecision,

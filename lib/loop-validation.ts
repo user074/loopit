@@ -497,13 +497,19 @@ export function validateLoop(loop: LoopDefinition): ValidationFinding[] {
     }
   }
 
-  const boundaryKinds = new Set(
+  const transitionKinds = new Set(
     loop.states
       .flatMap((state) => state.transitions)
       .map((transition) => transition.kind),
   );
+  const declaredBoundaryKinds = new Set(
+    loop.boundaries.map((boundary) => boundary.kind),
+  );
 
-  if (!boundaryKinds.has("interrupt")) {
+  if (
+    !transitionKinds.has("interrupt") &&
+    !declaredBoundaryKinds.has("interrupt")
+  ) {
     findings.push(
       finding(
         "missing-interrupt",
@@ -525,11 +531,32 @@ export function validateLoop(loop: LoopDefinition): ValidationFinding[] {
       .filter((transition) => transition.kind === "complete")
       .map((transition) => ({ state, transition })),
   );
+  const completionBoundaryText = loop.boundaries
+    .filter((boundary) => boundary.kind === "complete")
+    .map((boundary) => `${boundary.name} ${boundary.description}`)
+    .join(" ");
 
   if (completionNeedsAcceptance && challengeStates.length === 0) {
     for (const { state, transition } of completeTransitions) {
-      const condition = transition.when.toLowerCase();
-      if (!/challeng|independent (?:review|audit)|release review/.test(condition)) {
+      const target = stateMap.get(transition.to);
+      const completionProtocol = [
+        transition.when,
+        state.summary,
+        state.instruction,
+        state.completion,
+        target?.summary,
+        target?.instruction,
+        target?.completion,
+        completionBoundaryText,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      if (
+        !/challeng|independent (?:review|audit)|release review/.test(
+          completionProtocol,
+        )
+      ) {
         findings.push(
           finding(
             `completion-policy-missing-challenge-${transition.id}`,
@@ -542,7 +569,7 @@ export function validateLoop(loop: LoopDefinition): ValidationFinding[] {
       }
       if (
         loop.completionPolicy === "confirm" &&
-        !/accept|confirm/.test(condition)
+        !/accept|confirm/.test(completionProtocol)
       ) {
         findings.push(
           finding(
@@ -663,7 +690,7 @@ export function validateLoop(loop: LoopDefinition): ValidationFinding[] {
 
   if (
     loop.completionPolicy === "continuous" &&
-    boundaryKinds.has("complete")
+    transitionKinds.has("complete")
   ) {
     findings.push(
       finding(
@@ -673,7 +700,7 @@ export function validateLoop(loop: LoopDefinition): ValidationFinding[] {
         "Confirm that this completion exit is an intentional boundary; otherwise return new findings to the frontier and pause only for a human, budget, or declared limit.",
       ),
     );
-  } else if (!boundaryKinds.has("complete")) {
+  } else if (!transitionKinds.has("complete")) {
     findings.push(
       finding(
         "missing-completion",

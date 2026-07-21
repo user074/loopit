@@ -109,6 +109,10 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.match(studio, /Continue test/);
   assert.match(studio, /runtime-launch/);
   assert.match(studio, /Continuous runtime/);
+  assert.match(studio, /Live agent activity/);
+  assert.match(studio, /Construction agent activity/);
+  assert.match(studio, /Loop test activity/);
+  assert.match(studio, /activity-feed/);
   assert.match(studio, /formatRuntimeDuration/);
   assert.match(studio, /window\.setInterval\(\(\) => setRuntimeClock\(Date\.now\(\)\), 1000\)/);
   assert.match(studio, /Last continuous run/);
@@ -116,6 +120,7 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.match(studio, /fetch\(`\$\{DAEMON_URL\}\/api\/run`/);
   assert.match(studio, /Start loop/);
   assert.match(studio, /Automatic repair created revision/);
+  assert.match(studio, /stopped after one automatic patch/);
   assert.match(studio, /extractHumanReview/);
   assert.match(studio, /human-review-overlay/);
   assert.match(studio, /Your decision is needed/);

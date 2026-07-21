@@ -16,7 +16,6 @@ import type { PrimarySequence } from "@/lib/loop-flow";
 import { validateLoop } from "@/lib/loop-validation";
 import {
   extractHumanReview,
-  lastQuestion,
   type HumanReviewRequest,
 } from "@/lib/human-review";
 
@@ -26,7 +25,7 @@ const START_CONSTRUCTION =
 const RESOLVE_TEST_FAILURE = `The latest .loopit/test-report.md found unresolved preflight issues. Treat this result as the next construction action, never as a reason to stop.
 
 Read both .loopit/loop.md and .loopit/test-report.md. Classify every issue by ownership:
-- Agent-owned: missing, broad, or generic starting work; placeholder setup; missing domain handoff; unclear native deliverable; incomplete Result package; inconsistent artifact ownership; or state integration logic that an agent can define safely. Resolve these now by making the smallest coherent update to loop.md.
+- Agent-owned: parser or schema errors; missing IDs; invalid Kind or Role values; validator wording; missing, broad, or generic starting work; placeholder setup; missing domain handoff; unclear native deliverable; incomplete Result package; inconsistent artifact ownership; or state integration logic that an agent can define safely. Resolve these now in one smallest coherent structured loop update. Never ask the human to choose a machine field.
 - Human-owned: product intent, acceptance threshold, permission, credential, sensitive fact, risk choice, or policy that the agent must not invent. After resolving agent-owned issues, ask exactly one focused question for the highest-leverage missing human input.
 - Runtime evidence: behavior that only a later sandbox execution can prove. Define how the Result package will carry the observed evidence; do not claim it already passed.
 
@@ -81,6 +80,15 @@ interface AgentTestResult {
   report: string;
 }
 
+interface ActivityEntry {
+  id: string;
+  at: string | null;
+  text: string;
+  detail: string | null;
+  kind: string;
+  status: "active" | "complete";
+}
+
 interface RuntimeRun {
   id: string;
   loopRevision: number | null;
@@ -90,6 +98,7 @@ interface RuntimeRun {
   startedAt: string | null;
   finishedAt: string | null;
   summary: string;
+  activities?: ActivityEntry[];
 }
 
 interface WiringTestStep {
@@ -349,6 +358,51 @@ function formatRuntimeDuration(milliseconds: number) {
     .map((value) => String(value).padStart(2, "0"))
     .join(":");
   return days ? `${days}d ${clock}` : clock;
+}
+
+function activityEntry(event: Record<string, unknown>): ActivityEntry {
+  return {
+    id:
+      String(event.id || "") ||
+      `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    at: typeof event.at === "string" ? event.at : null,
+    text: String(event.text || "Agent is working"),
+    detail: typeof event.detail === "string" ? event.detail : null,
+    kind: typeof event.kind === "string" ? event.kind : "activity",
+    status: event.status === "complete" ? "complete" : "active",
+  };
+}
+
+function appendActivity(
+  current: ActivityEntry[],
+  event: Record<string, unknown>,
+) {
+  return [...current, activityEntry(event)].slice(-24);
+}
+
+function ActivityFeed({
+  entries,
+  label,
+}: {
+  entries: ActivityEntry[];
+  label: string;
+}) {
+  if (!entries.length) return null;
+  return (
+    <div aria-label={label} aria-live="polite" className="activity-feed" role="log">
+      {entries.slice(-8).map((entry) => (
+        <div className={`activity-entry is-${entry.status}`} key={entry.id}>
+          <span aria-hidden="true">
+            {entry.status === "complete" ? "✓" : "·"}
+          </span>
+          <div>
+            <strong>{entry.text}</strong>
+            {entry.detail && <small>{entry.detail}</small>}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function OverviewEditor({
@@ -1322,6 +1376,9 @@ export function LoopStudio({
   const [isWorking, setIsWorking] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [activity, setActivity] = useState("Ready");
+  const [constructionActivities, setConstructionActivities] = useState<
+    ActivityEntry[]
+  >([]);
   const [selectedStateId, setSelectedStateId] = useState<string | null>(null);
   const [focusedFlowStateId, setFocusedFlowStateId] = useState<string | null>(null);
   const [flowZoom, setFlowZoom] = useState<FlowZoom>(0);
@@ -1333,6 +1390,7 @@ export function LoopStudio({
   const [testedTransitionIds, setTestedTransitionIds] = useState<string[]>([]);
   const [isAgentTesting, setIsAgentTesting] = useState(false);
   const [agentTestActivity, setAgentTestActivity] = useState("Ready");
+  const [testActivities, setTestActivities] = useState<ActivityEntry[]>([]);
   const [agentTest, setAgentTest] = useState<AgentTestResult | null>(null);
   const [unifiedTestStage, setUnifiedTestStage] =
     useState<UnifiedTestStage>("idle");
@@ -1346,6 +1404,7 @@ export function LoopStudio({
   const [humanReviewError, setHumanReviewError] = useState<string | null>(null);
   const [runtimeRun, setRuntimeRun] = useState<RuntimeRun | null>(null);
   const [runtimeActivity, setRuntimeActivity] = useState("Ready to start");
+  const [runtimeActivities, setRuntimeActivities] = useState<ActivityEntry[]>([]);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [runtimeClock, setRuntimeClock] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1364,13 +1423,6 @@ export function LoopStudio({
   const activeConversation = conversationList.find(
     (conversation) => conversation.id === activeConversationId,
   );
-  const latestAgentMessage = [...messages]
-    .reverse()
-    .find(
-      (message) =>
-        message.role === "agent" && Boolean(lastQuestion(message.text)),
-    )?.text ?? null;
-
   const applyConversationPayload = useCallback(
     (payload: ConversationPayload) => {
       setActiveConversationId(payload.activeConversationId ?? null);
@@ -1425,6 +1477,7 @@ export function LoopStudio({
           run: RuntimeRun | null;
         };
         setRuntimeRun(payload.run);
+        setRuntimeActivities(payload.run?.activities ?? []);
       }
     } catch {
       setActivity("Local bridge is offline");
@@ -1481,7 +1534,7 @@ export function LoopStudio({
     }
     const request = extractHumanReview(
       agentTest.report,
-      latestAgentMessage,
+      null,
       loop.revision,
     );
     if (!request || request.key === dismissedHumanReviewKey) return;
@@ -1492,7 +1545,6 @@ export function LoopStudio({
     agentTest,
     dismissedHumanReviewKey,
     humanReview,
-    latestAgentMessage,
     loop,
     unifiedTestStage,
   ]);
@@ -1599,6 +1651,7 @@ export function LoopStudio({
     setInput("");
     setIsWorking(true);
     setActivity(`Starting ${agent === "codex" ? "Codex" : "Claude"}`);
+    setConstructionActivities([]);
     let finalAgentText: string | null = null;
 
     try {
@@ -1638,6 +1691,9 @@ export function LoopStudio({
 
           if (event.type === "status" || event.type === "activity") {
             setActivity(event.text);
+            setConstructionActivities((current) =>
+              appendActivity(current, event),
+            );
           }
           if (event.type === "agent_message") {
             finalAgentText = event.text;
@@ -1841,7 +1897,7 @@ export function LoopStudio({
     currentAgentTest && currentAgentTest.verdict !== "pass" && loop
       ? extractHumanReview(
           currentAgentTest.report,
-          latestAgentMessage,
+          null,
           loop.revision,
         )
       : null;
@@ -2033,6 +2089,7 @@ export function LoopStudio({
     setAgentTestActivity(
       `Starting a fresh, read-only ${agent === "codex" ? "Codex" : "Claude"} rehearsal`,
     );
+    setTestActivities([]);
 
     try {
       const response = await fetch(`${DAEMON_URL}/api/test`, {
@@ -2063,6 +2120,7 @@ export function LoopStudio({
           const event = JSON.parse(dataLine.slice(6));
           if (event.type === "status" || event.type === "activity") {
             setAgentTestActivity(event.text);
+            setTestActivities((current) => appendActivity(current, event));
           }
           if (event.type === "test_report") {
             resultForResolution = event.result as AgentTestResult;
@@ -2134,111 +2192,133 @@ export function LoopStudio({
           : `Revision ${testedLoop.revision}: the control-flow trace found a structural problem.`,
       );
 
-      setUnifiedTestStage("rehearsing");
-      let result = await runAgentRehearsal();
+      let result: AgentTestResult | null = null;
+      if (tracePassed) {
+        setUnifiedTestStage("rehearsing");
+        result = await runAgentRehearsal();
+        if (unifiedTestRunRef.current !== runId) return;
+        if (!result) {
+          appendAudit("The fresh-agent rehearsal did not produce a report.");
+          setUnifiedTestStage("needs-attention");
+          return;
+        }
+        appendAudit(
+          `Revision ${testedLoop.revision}: fresh-agent rehearsal returned ${result.verdict.toUpperCase()}.`,
+        );
+        if (result.verdict === "pass") {
+          setUnifiedTestStage("passed");
+          return;
+        }
+      } else {
+        appendAudit(
+          ...validateLoop(testedLoop)
+            .filter((finding) => finding.severity === "error")
+            .map((finding) => `${finding.title}: ${finding.detail}`),
+        );
+      }
+
+      setUnifiedTestStage("repairing");
+      const exactTraceFindings = validateLoop(testedLoop)
+        .filter((finding) => finding.severity === "error")
+        .map((finding) => `- ${finding.id}: ${finding.detail}`)
+        .join("\n");
+      const repairPrompt = tracePassed
+        ? RESOLVE_TEST_FAILURE
+        : `The deterministic control-flow trace failed for loop revision ${testedLoop.revision}. This is a machine-owned repair; do not ask the human to choose parser fields, state kinds, transition kinds, or validator wording.
+
+Read .loopit/loop.md and make one smallest coherent update that resolves every exact finding below. Do not inspect unrelated project files and do not change the user's objective.
+
+${exactTraceFindings}`;
+      await sendMessage(
+        repairPrompt,
+        "Fix issues found by the loop test",
+        true,
+      );
+      if (unifiedTestRunRef.current !== runId) return;
+
+      const loopResponse = await fetch(`${DAEMON_URL}/api/loop`);
+      if (!loopResponse.ok) {
+        throw new Error("The repaired loop could not be loaded.");
+      }
+      const payload = (await loopResponse.json()) as {
+        loop: LoopDefinition | null;
+      };
+      const repairedLoop = payload.loop;
+      if (!repairedLoop) throw new Error("The repair removed the loop.");
+
+      if (repairedLoop.revision === testedLoop.revision) {
+        appendAudit(
+          "The single automatic patch made no durable change. Loopit stopped instead of repeating an uncontrolled repair cycle.",
+        );
+        const review = result
+          ? extractHumanReview(
+              result.report,
+              null,
+              testedLoop.revision,
+            )
+          : null;
+        if (review) {
+          setHumanReview(review);
+          setHumanReviewInput("");
+          setHumanReviewError(null);
+        }
+        setUnifiedTestStage("needs-attention");
+        return;
+      }
+
+      appendAudit(
+        `Automatic repair created revision ${repairedLoop.revision}.`,
+        ...summarizeLoopChanges(testedLoop, repairedLoop),
+      );
+      testedLoop = repairedLoop;
+      setLoop(repairedLoop);
+      setParseError(null);
+      await new Promise<void>((resolve) =>
+        window.requestAnimationFrame(() => resolve()),
+      );
+      if (unifiedTestRunRef.current !== runId) return;
+
+      setUnifiedTestStage("retesting");
+      tracePassed = await runWiringTest(testedLoop, false);
+      if (unifiedTestRunRef.current !== runId) return;
+      appendAudit(
+        tracePassed
+          ? `Revision ${testedLoop.revision}: repaired control flow passes.`
+          : `Revision ${testedLoop.revision}: control flow still has ${
+              validateLoop(testedLoop).filter(
+                (finding) => finding.severity === "error",
+              ).length
+            } blocking findings.`,
+      );
+      if (!tracePassed) {
+        appendAudit(
+          "Loopit stopped after one automatic patch. The remaining validator findings are listed above; no parser choice was sent to human review.",
+        );
+        setUnifiedTestStage("needs-attention");
+        return;
+      }
+
+      result = await runAgentRehearsal();
       if (unifiedTestRunRef.current !== runId) return;
       if (!result) {
-        appendAudit("The fresh-agent rehearsal did not produce a report.");
+        appendAudit("The final rehearsal did not produce a report.");
         setUnifiedTestStage("needs-attention");
         return;
       }
       appendAudit(
-        `Revision ${testedLoop.revision}: fresh-agent rehearsal returned ${result.verdict.toUpperCase()}.`,
+        `Revision ${testedLoop.revision}: final fresh-agent rehearsal returned ${result.verdict.toUpperCase()}.`,
       );
-
-      if (tracePassed && result.verdict === "pass") {
+      if (result.verdict === "pass") {
         setUnifiedTestStage("passed");
         return;
       }
 
-      let lastRepairResponse: string | null = latestAgentMessage;
-      for (let repairRound = 1; repairRound <= 2; repairRound += 1) {
-        setUnifiedTestStage("repairing");
-        const repairPrompt =
-          result.verdict === "pass" && !tracePassed
-            ? `${RESOLVE_TEST_FAILURE}\n\nThe deterministic control-flow trace also failed for revision ${testedLoop.revision}. Inspect the declared graph and validation findings even though the rehearsal report passed, and repair the smallest agent-owned structural problem.`
-            : RESOLVE_TEST_FAILURE;
-        lastRepairResponse = await sendMessage(
-          repairPrompt,
-          repairRound === 1
-            ? "Fix issues found by the loop test"
-            : "Continue fixing the loop test",
-          true,
-        );
-        if (unifiedTestRunRef.current !== runId) return;
-
-        const loopResponse = await fetch(`${DAEMON_URL}/api/loop`);
-        if (!loopResponse.ok) {
-          throw new Error("The repaired loop could not be loaded.");
-        }
-        const payload = (await loopResponse.json()) as {
-          loop: LoopDefinition | null;
-        };
-        const repairedLoop = payload.loop;
-        if (!repairedLoop) throw new Error("The repair removed the loop.");
-
-        if (repairedLoop.revision === testedLoop.revision) {
-          appendAudit(
-            "No automatic change was made; the remaining issue needs human input or runtime evidence.",
-          );
-          const review = extractHumanReview(
-            result.report,
-            lastRepairResponse,
-            testedLoop.revision,
-          );
-          if (review) {
-            setHumanReview(review);
-            setHumanReviewInput("");
-            setHumanReviewError(null);
-          }
-          setUnifiedTestStage("needs-attention");
-          return;
-        }
-
-        appendAudit(
-          `Automatic repair created revision ${repairedLoop.revision}.`,
-          ...summarizeLoopChanges(testedLoop, repairedLoop),
-        );
-        testedLoop = repairedLoop;
-        setLoop(repairedLoop);
-        setParseError(null);
-        await new Promise<void>((resolve) =>
-          window.requestAnimationFrame(() => resolve()),
-        );
-        if (unifiedTestRunRef.current !== runId) return;
-
-        setUnifiedTestStage("retesting");
-        tracePassed = await runWiringTest(testedLoop, false);
-        if (unifiedTestRunRef.current !== runId) return;
-        appendAudit(
-          tracePassed
-            ? `Revision ${testedLoop.revision}: repaired control flow passes.`
-            : `Revision ${testedLoop.revision}: control flow still needs repair.`,
-        );
-
-        result = await runAgentRehearsal();
-        if (unifiedTestRunRef.current !== runId) return;
-        if (!result) {
-          appendAudit("The retest did not produce a report.");
-          setUnifiedTestStage("needs-attention");
-          return;
-        }
-        appendAudit(
-          `Revision ${testedLoop.revision}: fresh-agent retest returned ${result.verdict.toUpperCase()}.`,
-        );
-
-        if (tracePassed && result.verdict === "pass") {
-          setUnifiedTestStage("passed");
-          return;
-        }
-      }
-
       appendAudit(
-        "Automatic repair stopped after two rounds to avoid an uncontrolled repair loop.",
+        "Loopit stopped after one automatic patch. It will not keep creating revisions without a new diagnosis.",
       );
       const review = extractHumanReview(
         result.report,
-        lastRepairResponse,
+        null,
         testedLoop.revision,
       );
       if (review) {
@@ -2329,6 +2409,7 @@ export function LoopStudio({
     }
     setRuntimeError(null);
     setRuntimeActivity("Starting the first loop worker");
+    setRuntimeActivities([]);
 
     try {
       const response = await fetch(`${DAEMON_URL}/api/run`, {
@@ -2356,9 +2437,15 @@ export function LoopStudio({
             .find((line) => line.startsWith("data: "));
           if (!dataLine) continue;
           const event = JSON.parse(dataLine.slice(6));
-          if (event.type === "activity") setRuntimeActivity(event.text);
+          if (event.type === "activity") {
+            setRuntimeActivity(event.text);
+            setRuntimeActivities((current) => appendActivity(current, event));
+          }
           if (event.type === "run_started" || event.type === "run_updated") {
             setRuntimeRun(event.run as RuntimeRun);
+            if (Array.isArray(event.run.activities)) {
+              setRuntimeActivities(event.run.activities as ActivityEntry[]);
+            }
           }
           if (event.type === "agent_message") {
             setRuntimeActivity("Worker report saved");
@@ -2513,9 +2600,15 @@ export function LoopStudio({
               </article>
             ))}
             {isWorking && (
-              <div className="agent-activity">
-                <span className="pulse-dot" />
-                {activity}
+              <div className="agent-activity-card">
+                <div className="agent-activity">
+                  <span className="pulse-dot" />
+                  <strong>{activity}</strong>
+                </div>
+                <ActivityFeed
+                  entries={constructionActivities}
+                  label="Construction agent activity"
+                />
               </div>
             )}
             <div ref={messagesEndRef} />
@@ -2589,6 +2682,11 @@ export function LoopStudio({
                     ×
                   </button>
                 </header>
+
+                <div className="human-review-context">
+                  <span>Why this appeared</span>
+                  <p>{humanReview.context}</p>
+                </div>
 
                 <div className="human-review-question">
                   <span>Decision</span>
@@ -3065,6 +3163,10 @@ export function LoopStudio({
                           <strong>Fresh-agent rehearsal</strong>
                           <p>{agentTestActivity}</p>
                         </div>
+                        <ActivityFeed
+                          entries={testActivities}
+                          label="Loop test activity"
+                        />
                       </div>
                     )}
 
@@ -3214,6 +3316,24 @@ export function LoopStudio({
                     </button>
                   )}
                 </div>
+                {runtimeActivities.length > 0 && (
+                  <div className="runtime-activity-monitor">
+                    <div>
+                      <strong>
+                        {isRuntimeRunning ? "Live agent activity" : "Last run activity"}
+                      </strong>
+                      <span>
+                        {isRuntimeRunning
+                          ? "Updates directly from the local agent"
+                          : `${runtimeActivities.length} recorded events`}
+                      </span>
+                    </div>
+                    <ActivityFeed
+                      entries={runtimeActivities}
+                      label="Runtime agent activity"
+                    />
+                  </div>
+                )}
                 {runtimeError && <p className="runtime-error">{runtimeError}</p>}
                 {runtimeRun && runtimeRun.status !== "running" && (
                   <details className="runtime-last-run">

@@ -275,6 +275,11 @@ test("runtime completion still names its challenge and acceptance", () => {
     when: "The current evidence appears sufficient",
     kind: "complete",
   });
+  const terminal = unsafeRuntimeCompletion.states.find(
+    (state) => state.id === "loop-complete",
+  );
+  assert.ok(terminal);
+  terminal.summary = "Preserve the final outcome, then stop.";
 
   const findings = validateLoop(unsafeRuntimeCompletion);
   assert.ok(
@@ -290,6 +295,57 @@ test("runtime completion still names its challenge and acceptance", () => {
         finding.id ===
         "completion-policy-missing-confirmation-evaluate-to-unsafe-runtime-acceptance",
     ),
+  );
+});
+
+test("runtime completion may declare its protocol outside transition wording", () => {
+  const boundaryProtocol = structuredClone(loop);
+  boundaryProtocol.states = boundaryProtocol.states.filter(
+    (state) =>
+      state.id !== "challenge-completion" &&
+      state.id !== "confirm-completion",
+  );
+  const evaluate = boundaryProtocol.states.find(
+    (state) => state.id === "evaluate-work",
+  );
+  assert.ok(evaluate);
+  evaluate.transitions = evaluate.transitions.filter(
+    (transition) => transition.to !== "challenge-completion",
+  );
+  evaluate.transitions.push({
+    id: "evaluate-to-boundary-acceptance",
+    to: "loop-complete",
+    when: "The declared acceptance bar is met",
+    kind: "complete",
+  });
+  const completionBoundary = boundaryProtocol.boundaries.find(
+    (boundary) => boundary.kind === "complete",
+  );
+  assert.ok(completionBoundary);
+  completionBoundary.description =
+    "A fresh independent review challenges the candidate before explicit human confirmation.";
+
+  assert.equal(
+    validateLoop(boundaryProtocol).filter(
+      (finding) => finding.severity === "error",
+    ).length,
+    0,
+  );
+});
+
+test("a declared interrupt boundary does not require a fake domain edge", () => {
+  const boundaryOnly = structuredClone(loop);
+  boundaryOnly.states.forEach((state) => {
+    state.transitions = state.transitions.filter(
+      (transition) => transition.kind !== "interrupt",
+    );
+  });
+
+  assert.equal(
+    validateLoop(boundaryOnly).some(
+      (finding) => finding.id === "missing-interrupt",
+    ),
+    false,
   );
 });
 
