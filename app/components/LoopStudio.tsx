@@ -20,6 +20,7 @@ import {
 } from "@/lib/human-review";
 
 const DAEMON_URL = "http://127.0.0.1:4318";
+const MAX_AUTOMATIC_REPAIRS = 3;
 const START_CONSTRUCTION =
   "Begin first-time loop construction. No loop exists yet. Ask me one focused question about what work I want to keep progressing. Once the objective is clear, complete the proposal in this turn: list the specific hypotheses, features, design questions, opportunities, cases, or equivalent that I will actually track; choose one exact first task; propose the recognizable recurring work cycle; and specify the separate setup needed to begin. Inspect what exists, choose safe reversible defaults, and do not make me ask again for initial work, methods, models, tools, baselines, or tests.";
 const RESOLVE_TEST_FAILURE = `The latest .loopit/test-report.md found unresolved preflight issues. Treat this result as the next construction action, never as a reason to stop.
@@ -325,6 +326,10 @@ function summarizeLoopChanges(
   return changes.length
     ? changes
     : ["No automatic loop changes were needed"];
+}
+
+function loopContentSignature(loop: LoopDefinition) {
+  return JSON.stringify({ ...loop, revision: 0 });
 }
 
 function handoffSummary(items: string[]) {
@@ -1394,6 +1399,7 @@ export function LoopStudio({
   const [agentTest, setAgentTest] = useState<AgentTestResult | null>(null);
   const [unifiedTestStage, setUnifiedTestStage] =
     useState<UnifiedTestStage>("idle");
+  const [automaticRepairRound, setAutomaticRepairRound] = useState(0);
   const [testAudit, setTestAudit] = useState<string[]>([]);
   const [humanReview, setHumanReview] =
     useState<HumanReviewRequest | null>(null);
@@ -1922,13 +1928,13 @@ export function LoopStudio({
     ? TEST_STAGE_LABEL[unifiedTestStage]
     : testPassed
       ? "Passed"
-      : pendingHumanReview || currentAgentTest?.verdict === "risk"
+      : pendingHumanReview
         ? "Needs input"
-        : currentAgentTest?.verdict === "fail"
+        : currentAgentTest?.verdict === "risk" ||
+            currentAgentTest?.verdict === "fail" ||
+            unifiedTestStage === "needs-attention"
           ? "Needs repair"
-          : unifiedTestStage === "needs-attention"
-            ? "Needs input"
-            : "Not tested";
+          : "Not tested";
   const testPanelTone =
     testPanelLabel === "Passed"
       ? "passed"
@@ -2002,7 +2008,7 @@ export function LoopStudio({
             : pendingHumanReview
               ? "One human decision remains"
               : currentAgentTest
-                ? "Continue automatic repair"
+                ? "Automatic repair stopped safely"
                 : "Repair findings or request one decision",
       tone: resolutionTone,
     },
@@ -2178,155 +2184,143 @@ export function LoopStudio({
       setTestAudit((current) => [...current, ...items]);
 
     setTestAudit([]);
+    setAutomaticRepairRound(0);
     setHumanReview(null);
     setAgentTest(null);
     setUnifiedTestStage("tracing");
 
     try {
       let testedLoop = startingLoop;
-      let tracePassed = await runWiringTest(testedLoop, false);
-      if (unifiedTestRunRef.current !== runId) return;
-      appendAudit(
-        tracePassed
-          ? `Revision ${testedLoop.revision}: every declared transition was traced and the cycle closes.`
-          : `Revision ${testedLoop.revision}: the control-flow trace found a structural problem.`,
-      );
+      let repairCount = 0;
+      const seenLoopSignatures = new Set([
+        loopContentSignature(startingLoop),
+      ]);
 
-      let result: AgentTestResult | null = null;
-      if (tracePassed) {
-        setUnifiedTestStage("rehearsing");
-        result = await runAgentRehearsal();
+      while (unifiedTestRunRef.current === runId) {
+        setUnifiedTestStage(repairCount === 0 ? "tracing" : "retesting");
+        const tracePassed = await runWiringTest(testedLoop, false);
         if (unifiedTestRunRef.current !== runId) return;
-        if (!result) {
-          appendAudit("The fresh-agent rehearsal did not produce a report.");
-          setUnifiedTestStage("needs-attention");
-          return;
-        }
         appendAudit(
-          `Revision ${testedLoop.revision}: fresh-agent rehearsal returned ${result.verdict.toUpperCase()}.`,
+          tracePassed
+            ? `Revision ${testedLoop.revision}: every declared transition was traced and the cycle closes.`
+            : `Revision ${testedLoop.revision}: the control-flow trace found a structural problem.`,
         );
-        if (result.verdict === "pass") {
-          setUnifiedTestStage("passed");
-          return;
-        }
-      } else {
-        appendAudit(
-          ...validateLoop(testedLoop)
-            .filter((finding) => finding.severity === "error")
-            .map((finding) => `${finding.title}: ${finding.detail}`),
-        );
-      }
 
-      setUnifiedTestStage("repairing");
-      const exactTraceFindings = validateLoop(testedLoop)
-        .filter((finding) => finding.severity === "error")
-        .map((finding) => `- ${finding.id}: ${finding.detail}`)
-        .join("\n");
-      const repairPrompt = tracePassed
-        ? RESOLVE_TEST_FAILURE
-        : `The deterministic control-flow trace failed for loop revision ${testedLoop.revision}. This is a machine-owned repair; do not ask the human to choose parser fields, state kinds, transition kinds, or validator wording.
+        let result: AgentTestResult | null = null;
+        let repairPrompt: string;
+        if (tracePassed) {
+          setUnifiedTestStage(repairCount === 0 ? "rehearsing" : "retesting");
+          result = await runAgentRehearsal();
+          if (unifiedTestRunRef.current !== runId) return;
+          if (!result) {
+            appendAudit("The fresh-agent rehearsal did not produce a report.");
+            setUnifiedTestStage("needs-attention");
+            return;
+          }
+          appendAudit(
+            `Revision ${testedLoop.revision}: fresh-agent rehearsal returned ${result.verdict.toUpperCase()}.`,
+          );
+          if (result.verdict === "pass") {
+            setUnifiedTestStage("passed");
+            return;
+          }
+
+          const review = extractHumanReview(
+            result.report,
+            null,
+            testedLoop.revision,
+          );
+          if (review) {
+            appendAudit(
+              `Revision ${testedLoop.revision}: testing reached a genuinely human-owned decision.`,
+            );
+            setHumanReview(review);
+            setHumanReviewInput("");
+            setHumanReviewError(null);
+            setUnifiedTestStage("needs-attention");
+            return;
+          }
+          repairPrompt = RESOLVE_TEST_FAILURE;
+        } else {
+          const traceFindings = validateLoop(testedLoop).filter(
+            (finding) => finding.severity === "error",
+          );
+          appendAudit(
+            ...traceFindings.map(
+              (finding) => `${finding.title}: ${finding.detail}`,
+            ),
+          );
+          const exactTraceFindings = traceFindings
+            .map((finding) => `- ${finding.id}: ${finding.detail}`)
+            .join("\n");
+          repairPrompt = `The deterministic control-flow trace failed for loop revision ${testedLoop.revision}. This is a machine-owned repair; do not ask the human to choose parser fields, state kinds, transition kinds, or validator wording.
 
 Read .loopit/loop.md and make one smallest coherent update that resolves every exact finding below. Do not inspect unrelated project files and do not change the user's objective.
 
 ${exactTraceFindings}`;
-      await sendMessage(
-        repairPrompt,
-        "Fix issues found by the loop test",
-        true,
-      );
-      if (unifiedTestRunRef.current !== runId) return;
-
-      const loopResponse = await fetch(`${DAEMON_URL}/api/loop`);
-      if (!loopResponse.ok) {
-        throw new Error("The repaired loop could not be loaded.");
-      }
-      const payload = (await loopResponse.json()) as {
-        loop: LoopDefinition | null;
-      };
-      const repairedLoop = payload.loop;
-      if (!repairedLoop) throw new Error("The repair removed the loop.");
-
-      if (repairedLoop.revision === testedLoop.revision) {
-        appendAudit(
-          "The single automatic patch made no durable change. Loopit stopped instead of repeating an uncontrolled repair cycle.",
-        );
-        const review = result
-          ? extractHumanReview(
-              result.report,
-              null,
-              testedLoop.revision,
-            )
-          : null;
-        if (review) {
-          setHumanReview(review);
-          setHumanReviewInput("");
-          setHumanReviewError(null);
         }
-        setUnifiedTestStage("needs-attention");
-        return;
-      }
 
-      appendAudit(
-        `Automatic repair created revision ${repairedLoop.revision}.`,
-        ...summarizeLoopChanges(testedLoop, repairedLoop),
-      );
-      testedLoop = repairedLoop;
-      setLoop(repairedLoop);
-      setParseError(null);
-      await new Promise<void>((resolve) =>
-        window.requestAnimationFrame(() => resolve()),
-      );
-      if (unifiedTestRunRef.current !== runId) return;
+        if (repairCount >= MAX_AUTOMATIC_REPAIRS) {
+          appendAudit(
+            `Loopit stopped safely after ${MAX_AUTOMATIC_REPAIRS} automatic repairs. The latest findings are still unresolved, so another revision will not be created without a new test run.`,
+          );
+          setUnifiedTestStage("needs-attention");
+          return;
+        }
 
-      setUnifiedTestStage("retesting");
-      tracePassed = await runWiringTest(testedLoop, false);
-      if (unifiedTestRunRef.current !== runId) return;
-      appendAudit(
-        tracePassed
-          ? `Revision ${testedLoop.revision}: repaired control flow passes.`
-          : `Revision ${testedLoop.revision}: control flow still has ${
-              validateLoop(testedLoop).filter(
-                (finding) => finding.severity === "error",
-              ).length
-            } blocking findings.`,
-      );
-      if (!tracePassed) {
+        repairCount += 1;
+        setAutomaticRepairRound(repairCount);
+        setUnifiedTestStage("repairing");
         appendAudit(
-          "Loopit stopped after one automatic patch. The remaining validator findings are listed above; no parser choice was sent to human review.",
+          `Automatic repair ${repairCount} of ${MAX_AUTOMATIC_REPAIRS} started for revision ${testedLoop.revision}.`,
         );
-        setUnifiedTestStage("needs-attention");
-        return;
-      }
+        await sendMessage(
+          repairPrompt,
+          `Automatic repair ${repairCount} of ${MAX_AUTOMATIC_REPAIRS}`,
+          true,
+        );
+        if (unifiedTestRunRef.current !== runId) return;
 
-      result = await runAgentRehearsal();
-      if (unifiedTestRunRef.current !== runId) return;
-      if (!result) {
-        appendAudit("The final rehearsal did not produce a report.");
-        setUnifiedTestStage("needs-attention");
-        return;
-      }
-      appendAudit(
-        `Revision ${testedLoop.revision}: final fresh-agent rehearsal returned ${result.verdict.toUpperCase()}.`,
-      );
-      if (result.verdict === "pass") {
-        setUnifiedTestStage("passed");
-        return;
-      }
+        const loopResponse = await fetch(`${DAEMON_URL}/api/loop`);
+        if (!loopResponse.ok) {
+          throw new Error("The repaired loop could not be loaded.");
+        }
+        const payload = (await loopResponse.json()) as {
+          loop: LoopDefinition | null;
+        };
+        const repairedLoop = payload.loop;
+        if (!repairedLoop) throw new Error("The repair removed the loop.");
 
-      appendAudit(
-        "Loopit stopped after one automatic patch. It will not keep creating revisions without a new diagnosis.",
-      );
-      const review = extractHumanReview(
-        result.report,
-        null,
-        testedLoop.revision,
-      );
-      if (review) {
-        setHumanReview(review);
-        setHumanReviewInput("");
-        setHumanReviewError(null);
+        if (repairedLoop.revision === testedLoop.revision) {
+          appendAudit(
+            `Automatic repair ${repairCount} made no durable change. Loopit stopped instead of repeating the same repair.`,
+          );
+          setUnifiedTestStage("needs-attention");
+          return;
+        }
+
+        const repairedSignature = loopContentSignature(repairedLoop);
+        if (seenLoopSignatures.has(repairedSignature)) {
+          appendAudit(
+            `Automatic repair ${repairCount} recreated an earlier loop design at revision ${repairedLoop.revision}. Loopit detected the cycle and stopped.`,
+          );
+          setLoop(repairedLoop);
+          setUnifiedTestStage("needs-attention");
+          return;
+        }
+
+        appendAudit(
+          `Automatic repair ${repairCount} created revision ${repairedLoop.revision}.`,
+          ...summarizeLoopChanges(testedLoop, repairedLoop),
+        );
+        seenLoopSignatures.add(repairedSignature);
+        testedLoop = repairedLoop;
+        setLoop(repairedLoop);
+        setParseError(null);
+        await new Promise<void>((resolve) =>
+          window.requestAnimationFrame(() => resolve()),
+        );
       }
-      setUnifiedTestStage("needs-attention");
     } catch (error) {
       appendAudit(
         error instanceof Error ? error.message : "The loop test could not finish.",
@@ -2987,8 +2981,8 @@ ${exactTraceFindings}`;
                   <div className="flow-test-content">
                     <div className="test-lab-heading">
                       <p>
-                        One path to a final result: check, repair or decide,
-                        retest, then pass the current revision.
+                        One click checks, repairs, and retests each new revision
+                        until the loop passes or needs your decision.
                       </p>
                       <div className="test-lab-actions">
                         {isUnifiedTestRunning ? (
@@ -3014,8 +3008,8 @@ ${exactTraceFindings}`;
                               ? "Test again"
                               : pendingHumanReview
                                 ? "Review decision"
-                                : currentAgentTest
-                                  ? "Continue test"
+                                : unifiedTestStage === "needs-attention"
+                                  ? "Retry test"
                                   : "Start test"}
                           </button>
                         )}
@@ -3080,15 +3074,15 @@ ${exactTraceFindings}`;
 
                     {!isUnifiedTestRunning &&
                       !testPassed &&
-                      currentAgentTest &&
+                      unifiedTestStage === "needs-attention" &&
                       !pendingHumanReview && (
                         <div className="test-completion is-blocked">
                           <span aria-hidden="true">!</span>
                           <div>
-                            <strong>The test is not finished yet</strong>
+                            <strong>Automatic testing stopped safely</strong>
                             <p>
-                              Continue the test to repair the remaining findings
-                              and run every check again.
+                              The audit below explains whether the agent made no
+                              change, repeated a design, or reached the repair limit.
                             </p>
                           </div>
                         </div>
@@ -3176,8 +3170,9 @@ ${exactTraceFindings}`;
                         <div>
                           <strong>Fixing the loop</strong>
                           <p>
-                            Agent-owned issues are being repaired before the
-                            next test.
+                            Automatic repair {automaticRepairRound} of{" "}
+                            {MAX_AUTOMATIC_REPAIRS}; the next revision will be
+                            tested without another click.
                           </p>
                         </div>
                       </div>
