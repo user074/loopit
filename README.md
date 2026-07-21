@@ -4,7 +4,37 @@
 
 Loopit is a control plane for continuing agent work. It helps a person turn an objective into a durable, testable loop that can keep making meaningful progress for 24 hours or longer, then makes that loop understandable, steerable, and easy to improve.
 
-> **Project status:** first local construction-studio MVP.
+> **Project status:** local continuous-runtime MVP.
+>
+> **Built entirely with OpenAI Codex + GPT-5.6 Sol at Extra High reasoning.** The development record is the conversation itself: the user brought observations from real long-running-agent work, and Codex helped turn each observation into product principles, interface decisions, implementation, tests, and the next dogfood experiment. Codex is also a first-class execution backend inside Loopit.
+
+## Install and run — copy/paste
+
+Requirements: macOS or Linux, Node.js 22.13 or newer, Git, and a locally installed and authenticated `codex` or `claude` CLI.
+
+Copy and paste this block to install Loopit and make the `loopit` command available:
+
+```bash
+git clone https://github.com/user074/loopit.git
+cd loopit
+npm install
+npm link
+```
+
+Then open a terminal in the separate repository where the agent should work and paste:
+
+```bash
+loopit
+```
+
+For example, if the target is `~/Github/my-project`:
+
+```bash
+cd ~/Github/my-project
+loopit
+```
+
+Keep that terminal open, then open [http://localhost:3000](http://localhost:3000). Confirm that the header names the intended **Target project** before constructing or running anything. Loopit inherits the user's existing Codex model and reasoning configuration; this project was developed with GPT-5.6 Sol at Extra High (`xhigh`). If Codex is not authenticated yet, run `codex login` once before starting Loopit. No separate Loopit account, OpenAI API key, or hosted service is required.
 
 ## Try the construction MVP
 
@@ -19,23 +49,26 @@ The screen has two connected parts:
 
 The current runtime is intentionally minimal. Durable artifacts and the iteration handoff carry context between fresh workers, which demonstrates that the loop can continue without depending on one long agent session. The next runtime layer must validate each claimed state transition and result package, resume a paused parent run, render human decisions as focused controls, enforce time/cost/tool limits, detect lack of progress, and add higher-level progress and health summaries.
 
-Requirements: Node.js 22.13 or newer and at least one locally authenticated agent CLI (`codex` or `claude`). No separate API key or hosted Loopit account is used.
+## The conversation is how Codex and GPT-5.6 Sol were used
 
-Install the control plane once from this repository:
+Loopit was not generated from a finished specification. It was developed through the conversation between the user and [OpenAI Codex](https://learn.chatgpt.com/docs/codex/cli), using **GPT-5.6 Sol** with **Extra High** reasoning (`xhigh`) for every stage:
 
-```bash
-npm install
-npm link
-```
+- **Discovering the problem:** the user described why agents usually stop after an hour, how a working research loop keeps hypotheses and evidence durable, and why constructing the loop is harder than merely running one. Codex questioned, synthesized, and documented those observations as Loopit's north star.
+- **Generalizing from lived examples:** the conversation compared research, software engineering, UI/UX, business, and job-agent development. Together, the user and Codex separated domain work from runtime safeguards and centered the design on profession-native deliverables, objective-backed next work, and durable handoffs between agents and sessions.
+- **Designing the interface:** the user repeatedly tested the local UI and explained what was confusing—generic language, dense text, an unclear loop-back, non-semantic zoom, hidden agent activity, and review prompts for parser problems. GPT-5.6 Sol translated that feedback into a simpler two-part construction interface, visual editing, one-click loop testing, activity feeds, and focused human-review panels.
+- **Implementing and verifying it:** Codex inspected and edited the Next.js application, local daemon, Markdown parsers, schemas, validators, runtime scheduler, styles, tests, README, and runbook. It ran builds, lint, and automated tests after each material change rather than treating generated code as finished.
+- **Dogfooding the runtime:** the user launched Loopit against a separate job-application project. When the worker unexpectedly paused after one six-minute turn, Codex read the durable run record, identified the missing scheduler, and implemented automatic Continue → next-worker iterations with visible Completed, Next, and Next state handoffs.
 
-Then launch it from the separate repository where the agent should work:
+The same Codex/GPT-5.6 Sol collaboration is part of the product:
 
-```bash
-cd /path/to/your-project
-loopit
-```
+- **Construction supervisor:** a read-only Codex session turns the user's objective and repository context into domain-specific starting work, setup, states, handoffs, boundaries, and completion policy. Its transient output is schema-constrained; Loopit alone writes canonical `.loopit/loop.md`.
+- **Independent tester and repairer:** a fresh ephemeral Codex session challenges recurrence, handoffs, edge cases, interruption, and completion. Agent-owned findings are repaired and retested automatically; only genuine questions of human intent, authority, private information, cost, or risk return to the user.
+- **Continuous workers:** each workspace-write Codex worker completes one ordinary loop recurrence, modifies target-project artifacts, runs relevant commands and tests, integrates evidence, and emits a Markdown handoff. Loopit—not the model response—owns continuation and launches the next fresh worker.
+- **Control outside the model:** Loopit owns durable Markdown state, schema validation, revisions, deterministic traces, conversation records, runtime timing, iteration history, repository boundaries, and the Stop control. GPT-5.6 Sol supplies the reasoning and tool use; Loopit supplies the control plane.
 
-Open [http://localhost:3000](http://localhost:3000). The Loopit application still runs from this control-plane repository, but its working directory and all agent processes are rooted in the target project. The header names that target before any work begins. Choose **Construct my first loop** or describe the work directly in chat.
+The Codex integration uses the locally installed and authenticated CLI, so Loopit does not require a separate OpenAI API key or direct API integration; usage follows the user's existing Codex account and CLI configuration.
+
+The Loopit application runs from the cloned control-plane repository, but its working directory and all agent processes are rooted in the target project. Choose **Construct my first loop** or describe the work directly in chat.
 
 The target owns `.loopit/loop.md`, conversations, test reports, session pointers, and runtime records. Construction, rehearsal, and runtime agents inspect that target; runtime workers may modify its project files. They do not run against the Loopit source repository. Launching `npm run dev` here remains useful for control-plane development, but **Start loop** is deliberately locked until Loopit is restarted with a separate target.
 
@@ -50,13 +83,6 @@ npm run dev -- /absolute/path/to/your-project
 Markdown is the durable agent-facing source of truth, not the primary human interface. Loopit parses it into an internal graph for deterministic checks and presents the understandable, interactive version in the web UI. Construction uses a transient JSON-schema response only as a validation boundary between the CLI and Loopit; it is immediately serialized to Markdown and is never saved as a second loop definition. No generated JSON copy of a loop, conversation, or test report is maintained.
 
 See the [local runbook](RUNBOOK.md) for verification, stopping the current agent turn, stopping both Loopit processes, and recovering when the original terminal is gone.
-
-Loopit inherits the selected CLI's local model configuration. If an older Codex CLI cannot use its configured model, either update it with `codex update` or temporarily select a compatible model for Loopit:
-
-```bash
-cd /path/to/your-project
-LOOPIT_CODEX_MODEL=gpt-5.5 loopit
-```
 
 The seed proposal intentionally uses one small repair cycle—**Validate the loop → Revise durable state → Validate the loop**—plus explicit human-interrupt and completion exits. It is a construction loop for dogfooding Loopit itself, not a claim that every domain needs the same states.
 

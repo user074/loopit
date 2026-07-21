@@ -6,6 +6,23 @@ const daemon = await readFile(
   new URL("../scripts/loopit-daemon.mjs", import.meta.url),
   "utf8",
 );
+const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+
+test("README presents the Codex and GPT-5.6 Sol conversation as the build process", () => {
+  assert.match(readme, /Built entirely with OpenAI Codex \+ GPT-5\.6 Sol at Extra High reasoning/);
+  assert.match(readme, /## The conversation is how Codex and GPT-5\.6 Sol were used/);
+  assert.match(readme, /using \*\*GPT-5\.6 Sol\*\* with \*\*Extra High\*\* reasoning \(`xhigh`\) for every stage/);
+  assert.match(readme, /Discovering the problem/);
+  assert.match(readme, /Generalizing from lived examples/);
+  assert.match(readme, /Designing the interface/);
+  assert.match(readme, /Implementing and verifying it/);
+  assert.match(readme, /Dogfooding the runtime/);
+  assert.match(readme, /## Install and run — copy\/paste/);
+  assert.match(readme, /git clone https:\/\/github\.com\/user074\/loopit\.git/);
+  assert.match(readme, /npm link/);
+  assert.match(readme, /Then open a terminal[\s\S]*```bash\nloopit\n```/);
+  assert.doesNotMatch(readme, /LOOPIT_CODEX_MODEL=/);
+});
 
 test("construction separates building a product from operating it", () => {
   assert.match(daemon, /The product, system, organization, or outcome being described/);

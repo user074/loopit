@@ -135,11 +135,11 @@ codex update
 codex --version
 ```
 
-Loopit also accepts a temporary per-run model override when diagnosing compatibility:
+Loopit also accepts an explicit model override. The documented Codex path uses GPT-5.6 Sol; Extra High reasoning (`xhigh`) is inherited from the Codex configuration:
 
 ```bash
 cd /path/to/your-project
-LOOPIT_CODEX_MODEL=gpt-5.5 loopit
+LOOPIT_CODEX_MODEL=gpt-5.6-sol loopit
 ```
 
 ### The UI opens but cannot reach the local bridge
