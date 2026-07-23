@@ -464,6 +464,21 @@ p {
   font-size: 12px;
 }
 
+.agent-activity > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.agent-activity small {
+  overflow: hidden;
+  color: #77817b;
+  font-size: 9px;
+  font-weight: 450;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .agent-activity-card {
   padding: 10px 11px;
   border: 1px solid #d9ddd8;
@@ -504,6 +519,26 @@ p {
   animation: pulse 1.2s ease-in-out infinite;
 }
 
+.activity-entry.is-error > span {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.activity-entry header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.activity-entry time {
+  flex: none;
+  color: #909892;
+  font-size: 7px;
+  font-weight: 500;
+}
+
 .activity-entry strong,
 .activity-entry small {
   display: block;
@@ -522,6 +557,194 @@ p {
   color: #7a837e;
   font-size: 8px;
   line-height: 1.4;
+}
+
+.activity-feed.is-roomy {
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.activity-feed.is-roomy .activity-entry {
+  gap: 8px;
+}
+
+.activity-feed.is-roomy .activity-entry strong {
+  font-size: 10px;
+}
+
+.activity-feed.is-roomy .activity-entry small {
+  display: -webkit-box;
+  overflow: hidden;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 9px;
+  line-height: 1.5;
+  text-overflow: initial;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.activity-output {
+  margin-top: 5px;
+}
+
+.activity-output summary,
+.live-agent-report summary {
+  width: fit-content;
+  cursor: pointer;
+  color: #4e745f;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.activity-output pre {
+  max-height: 220px;
+  margin: 6px 0 0;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid #e1e4e0;
+  border-radius: 6px;
+  background: #f5f6f3;
+  color: #3f4944;
+  font-size: 8px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.activity-feed-toggle {
+  width: fit-content;
+  margin: 3px 0 0 23px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #4e745f;
+  cursor: pointer;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 8px;
+  font-weight: 750;
+}
+
+.live-agent-transcript {
+  padding: 13px;
+  border: 1px solid #d7ddd8;
+  border-radius: 12px;
+  background: #fafaf8;
+  box-shadow: 0 8px 22px rgb(41 58 49 / 5%);
+}
+
+.live-agent-transcript.is-running {
+  border-color: #a9cab6;
+  background: linear-gradient(180deg, #f8fcf9 0%, #fafaf8 55%);
+  box-shadow: 0 10px 28px rgb(45 112 76 / 9%);
+}
+
+.live-agent-transcript > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid #e1e5e1;
+}
+
+.live-agent-transcript > header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.live-agent-transcript > header strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.runtime-transcript-status {
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: #eef0ed;
+  color: #66716b;
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 800;
+  text-transform: capitalize;
+}
+
+.runtime-transcript-status.is-running {
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.runtime-transcript-status.is-failed {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.runtime-transcript-status.is-paused,
+.runtime-transcript-status.is-interrupted {
+  background: var(--amber-soft);
+  color: var(--amber);
+}
+
+.live-agent-now {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 8px 9px;
+  border-radius: 8px;
+  background: white;
+}
+
+.live-agent-now > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.live-agent-now strong,
+.live-agent-now small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-agent-now strong {
+  color: #344039;
+  font-size: 10px;
+}
+
+.live-agent-now small {
+  color: #77817b;
+  font-size: 8px;
+}
+
+.live-agent-now button {
+  padding: 5px 8px;
+  border: 1px solid #e2c3be;
+  border-radius: 6px;
+  background: #fff9f8;
+  color: #8a4039;
+  cursor: pointer;
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.live-agent-report {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid #e1e5e1;
+}
+
+.live-agent-report p {
+  max-height: 220px;
+  margin: 7px 0 0;
+  overflow: auto;
+  color: #59645e;
+  font-size: 9px;
+  line-height: 1.55;
+  white-space: pre-wrap;
 }
 
 .pulse-dot {

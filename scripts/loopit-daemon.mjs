@@ -381,6 +381,7 @@ async function readRunFile(name) {
         at,
         text,
         detail: detail.join(" — ") || null,
+        output: null,
         kind: "activity",
         status: "complete",
       };
@@ -772,6 +773,42 @@ function activityDetail(value, limit = 180) {
   return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
 }
 
+function activityOutput(value, limit = 4_000) {
+  if (value === null || value === undefined) return null;
+  let text;
+  if (typeof value === "string") {
+    text = value;
+  } else {
+    try {
+      text = JSON.stringify(value, null, 2);
+    } catch {
+      text = String(value);
+    }
+  }
+  text = text
+    // Provider command output may contain terminal color and cursor controls.
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .trim();
+  if (!text) return null;
+  return text.length > limit
+    ? `${text.slice(0, limit)}\n… output truncated by Loopit`
+    : text;
+}
+
+function usageDetail(usage) {
+  if (!usage || typeof usage !== "object") return null;
+  const input = Number(usage.input_tokens ?? usage.inputTokens ?? 0);
+  const cached = Number(
+    usage.cached_input_tokens ?? usage.cachedInputTokens ?? 0,
+  );
+  const output = Number(usage.output_tokens ?? usage.outputTokens ?? 0);
+  const parts = [];
+  if (input) parts.push(`${input.toLocaleString()} input tokens`);
+  if (cached) parts.push(`${cached.toLocaleString()} cached`);
+  if (output) parts.push(`${output.toLocaleString()} output tokens`);
+  return parts.join(" · ") || null;
+}
+
 function visibleProjectPath(value) {
   if (!value) return null;
   const absolute = path.resolve(projectRoot, String(value));
@@ -780,6 +817,41 @@ function visibleProjectPath(value) {
 }
 
 function codexActivity(event, purpose) {
+  if (event.type === "thread.started") {
+    return {
+      text: "Codex worker connected",
+      detail: activityDetail(event.thread_id),
+      kind: "session",
+      status: "complete",
+    };
+  }
+  if (event.type === "turn.started") {
+    return {
+      text: "Agent turn started",
+      detail: null,
+      kind: "session",
+      status: "active",
+    };
+  }
+  if (event.type === "turn.completed") {
+    return {
+      text: "Agent turn finished",
+      detail: usageDetail(event.usage),
+      kind: "session",
+      status: "complete",
+    };
+  }
+  if (event.type === "turn.failed" || event.type === "error") {
+    return {
+      text: "Agent encountered a problem",
+      detail: activityDetail(
+        event.error?.message ?? event.error ?? event.message ?? event.type,
+      ),
+      output: activityOutput(event.error?.message ?? event.error ?? event.message),
+      kind: "error",
+      status: "error",
+    };
+  }
   if (event.type !== "item.started" && event.type !== "item.completed") {
     return null;
   }
@@ -787,45 +859,75 @@ function codexActivity(event, purpose) {
   if (!item) return null;
   const complete = event.type === "item.completed";
   const status = complete ? "complete" : "active";
+  const id = item.id ? `codex-${purpose}-${item.id}` : undefined;
 
   if (item.type === "command_execution") {
+    const exitCode = Number.isInteger(item.exit_code) ? item.exit_code : null;
+    const failed = complete && exitCode !== null && exitCode !== 0;
     const label =
       purpose === "runtime"
         ? complete
-          ? "Project command finished"
+          ? failed
+            ? "Project command failed"
+            : "Project command finished"
           : "Running project command"
         : complete
-          ? "Project inspection finished"
+          ? failed
+            ? "Project inspection failed"
+            : "Project inspection finished"
           : "Inspecting project files";
     return {
+      id,
       text: label,
       detail: activityDetail(item.command),
+      output: complete
+        ? activityOutput(
+            item.aggregated_output ?? item.output ?? item.stdout ?? item.stderr,
+          )
+        : null,
       kind: "command",
-      status,
+      status: failed ? "error" : status,
     };
   }
   if (item.type === "file_change") {
-    const files = (item.changes ?? [])
-      .map((change) => visibleProjectPath(change.path ?? change.file_path))
+    const changes = item.changes ?? [];
+    const files = changes
+      .map((change) => {
+        const file = visibleProjectPath(change.path ?? change.file_path);
+        const changeKind = activityDetail(change.kind ?? change.type, 40);
+        return [changeKind, file].filter(Boolean).join(" ");
+      })
       .filter(Boolean)
       .join(", ");
     return {
+      id,
       text: complete ? "Project files updated" : "Updating project files",
       detail: activityDetail(files),
+      output: complete ? activityOutput(files, 2_000) : null,
       kind: "write",
       status,
     };
   }
   if (item.type === "mcp_tool_call") {
+    const failed = complete && Boolean(item.error);
     return {
-      text: complete ? "Connected tool finished" : "Using a connected tool",
+      id,
+      text: complete
+        ? failed
+          ? "Connected tool failed"
+          : "Connected tool finished"
+        : "Using a connected tool",
       detail: activityDetail(item.tool ?? item.name ?? item.server),
+      output: complete
+        ? activityOutput(item.error ?? item.result ?? item.output)
+        : null,
       kind: "tool",
-      status,
+      status: failed ? "error" : status,
     };
   }
   if (item.type === "reasoning") {
     return {
+      id,
       text:
         purpose === "runtime"
           ? "Planning the next loop step"
@@ -837,6 +939,51 @@ function codexActivity(event, purpose) {
       status,
     };
   }
+  if (item.type === "web_search") {
+    return {
+      id,
+      text: complete ? "Web search finished" : "Searching the web",
+      detail: activityDetail(item.query ?? item.search_query),
+      output: complete ? activityOutput(item.results ?? item.result) : null,
+      kind: "search",
+      status,
+    };
+  }
+  if (
+    item.type === "todo_list" ||
+    item.type === "plan" ||
+    item.type === "plan_update"
+  ) {
+    const items = item.items ?? item.plan ?? [];
+    const plan = Array.isArray(items)
+      ? items
+          .map((entry) => {
+            if (typeof entry === "string") return entry;
+            return [entry.status, entry.text ?? entry.step ?? entry.content]
+              .filter(Boolean)
+              .join(" · ");
+          })
+          .join("\n")
+      : items;
+    return {
+      id,
+      text: complete ? "Plan updated" : "Updating the plan",
+      detail: activityDetail(plan),
+      output: complete ? activityOutput(plan) : null,
+      kind: "plan",
+      status,
+    };
+  }
+  if (item.type === "agent_message") {
+    return {
+      id,
+      text: complete ? "Agent reported progress" : "Agent is preparing an update",
+      detail: complete ? activityDetail(item.text, 280) : null,
+      output: complete ? activityOutput(item.text) : null,
+      kind: "message",
+      status,
+    };
+  }
   return null;
 }
 
@@ -845,10 +992,16 @@ function claudeToolActivity(tool, purpose) {
   const name = String(tool?.name ?? "tool");
   const projectPath = visibleProjectPath(input.file_path ?? input.path);
   if (/^read$/i.test(name)) {
-    return { text: "Reading project file", detail: projectPath, kind: "read" };
+    return {
+      id: tool?.id ? `claude-${purpose}-${tool.id}` : undefined,
+      text: "Reading project file",
+      detail: projectPath,
+      kind: "read",
+    };
   }
   if (/^(edit|write|notebookedit)$/i.test(name)) {
     return {
+      id: tool?.id ? `claude-${purpose}-${tool.id}` : undefined,
       text: /^write$/i.test(name) ? "Writing project file" : "Editing project file",
       detail: projectPath,
       kind: "write",
@@ -856,6 +1009,7 @@ function claudeToolActivity(tool, purpose) {
   }
   if (/^glob$/i.test(name)) {
     return {
+      id: tool?.id ? `claude-${purpose}-${tool.id}` : undefined,
       text: "Finding project files",
       detail: activityDetail(input.pattern),
       kind: "read",
@@ -863,6 +1017,7 @@ function claudeToolActivity(tool, purpose) {
   }
   if (/^grep$/i.test(name)) {
     return {
+      id: tool?.id ? `claude-${purpose}-${tool.id}` : undefined,
       text: "Searching project files",
       detail: activityDetail(input.pattern),
       kind: "read",
@@ -870,16 +1025,116 @@ function claudeToolActivity(tool, purpose) {
   }
   if (/^bash$/i.test(name)) {
     return {
+      id: tool?.id ? `claude-${purpose}-${tool.id}` : undefined,
       text: purpose === "runtime" ? "Running project command" : "Inspecting project",
       detail: activityDetail(input.command),
       kind: "command",
     };
   }
   return {
+    id: tool?.id ? `claude-${purpose}-${tool.id}` : undefined,
     text: `Using ${name}`,
     detail: activityDetail(projectPath ?? input.query ?? input.pattern),
     kind: "tool",
   };
+}
+
+function claudeCompletedToolActivity(tool, result, purpose) {
+  const started = claudeToolActivity(tool, purpose);
+  const failed = Boolean(result?.is_error);
+  const present = started.text
+    .replace(/^Reading /, "Read ")
+    .replace(/^Finding /, "Found ")
+    .replace(/^Searching /, "Searched ")
+    .replace(/^Editing /, "Edited ")
+    .replace(/^Writing /, "Wrote ")
+    .replace(/^Running /, "Ran ")
+    .replace(/^Inspecting /, "Inspected ")
+    .replace(/^Using /, "Used ");
+  return {
+    ...started,
+    text: failed ? `${present} · failed` : `${present} · finished`,
+    output: activityOutput(result?.content ?? result?.result),
+    status: failed ? "error" : "complete",
+  };
+}
+
+function claudeActivities(event, purpose, toolUses) {
+  const activities = [];
+  if (event.type === "system" && event.subtype === "init") {
+    const tools = Array.isArray(event.tools) ? `${event.tools.length} tools` : null;
+    activities.push({
+      text: "Claude worker connected",
+      detail: [event.model, tools].filter(Boolean).join(" · ") || null,
+      kind: "session",
+      status: "complete",
+    });
+  }
+  if (event.type === "system" && event.subtype === "api_retry") {
+    const attempt = event.attempt
+      ? `attempt ${event.attempt}${event.max_retries ? ` of ${event.max_retries}` : ""}`
+      : null;
+    const delay = Number(event.retry_delay_ms)
+      ? `retrying in ${Math.ceil(Number(event.retry_delay_ms) / 1_000)}s`
+      : null;
+    activities.push({
+      text: "Claude is retrying a provider request",
+      detail: [attempt, delay, event.error].filter(Boolean).join(" · ") || null,
+      output: activityOutput(event.error_status ?? event.error),
+      kind: "retry",
+      status: "active",
+    });
+  }
+  if (event.type === "assistant") {
+    const blocks = event.message?.content ?? [];
+    for (const block of blocks) {
+      if (block.type === "tool_use") {
+        if (block.id) toolUses.set(block.id, block);
+        activities.push({
+          ...claudeToolActivity(block, purpose),
+          status: "active",
+        });
+      } else if (block.type === "text" && String(block.text ?? "").trim()) {
+        activities.push({
+          text: "Agent reported progress",
+          detail: activityDetail(block.text, 280),
+          output: activityOutput(block.text),
+          kind: "message",
+          status: "complete",
+        });
+      }
+      // Deliberately do not expose thinking blocks as an operational transcript.
+    }
+  }
+  if (event.type === "user") {
+    const blocks = Array.isArray(event.message?.content)
+      ? event.message.content
+      : [];
+    for (const block of blocks) {
+      if (block.type !== "tool_result") continue;
+      const tool = toolUses.get(block.tool_use_id) ?? { name: "tool", input: {} };
+      activities.push(claudeCompletedToolActivity(tool, block, purpose));
+      if (block.tool_use_id) toolUses.delete(block.tool_use_id);
+    }
+  }
+  if (event.type === "result") {
+    const parts = [];
+    if (Number(event.num_turns)) parts.push(`${event.num_turns} agent turns`);
+    if (Number(event.duration_ms)) {
+      parts.push(`${Math.round(Number(event.duration_ms) / 1_000)}s`);
+    }
+    if (Number(event.total_cost_usd)) {
+      parts.push(`$${Number(event.total_cost_usd).toFixed(3)}`);
+    }
+    activities.push({
+      text: event.is_error ? "Agent turn failed" : "Agent turn finished",
+      detail: parts.join(" · ") || usageDetail(event.usage),
+      output: event.is_error ? activityOutput(event.result) : null,
+      kind: event.is_error ? "error" : "session",
+      status: event.is_error ? "error" : "complete",
+    });
+  }
+  return activities;
 }
 
 function parseConstructionResult(value) {
@@ -1013,11 +1268,33 @@ async function streamConstruction(request, response) {
   let stderrBuffer = "";
   let constructionResultValue = null;
   let providerErrorSent = false;
+  const claudeToolUses = new Map();
+  let lastActivityAt = Date.now();
+  let lastActivityText = `Starting ${agent === "codex" ? "Codex" : "Claude"}`;
+  const sendActivity = (progress) => {
+    lastActivityAt = Date.now();
+    lastActivityText = progress.text;
+    send({ type: "activity", ...progress });
+  };
+  const heartbeat = setInterval(() => {
+    if (child.exitCode !== null || child.killed) return;
+    const quietSeconds = Math.max(
+      1,
+      Math.floor((Date.now() - lastActivityAt) / 1_000),
+    );
+    send({
+      type: "heartbeat",
+      text: "Agent is still working",
+      detail: `${quietSeconds}s since the last event · ${lastActivityText}`,
+      kind: "heartbeat",
+      status: "active",
+    });
+  }, 15_000);
 
   const handleEvent = async (event) => {
     if (agent === "codex") {
       const progress = codexActivity(event, "construction");
-      if (progress) send({ type: "activity", ...progress });
+      if (progress) sendActivity(progress);
       if (event.type === "item.completed" && event.item?.type === "agent_message") {
         constructionResultValue = event.item.text;
       }
@@ -1036,17 +1313,12 @@ async function streamConstruction(request, response) {
       return;
     }
 
-    if (event.type === "assistant") {
-      const blocks = event.message?.content ?? [];
-      blocks
-        .filter((block) => block.type === "tool_use")
-        .forEach((tool) =>
-          send({
-            type: "activity",
-            ...claudeToolActivity(tool, "construction"),
-            status: "active",
-          }),
-        );
+    for (const progress of claudeActivities(
+      event,
+      "construction",
+      claudeToolUses,
+    )) {
+      sendActivity(progress);
     }
     if (event.type === "result") {
       constructionResultValue = event.structured_output ?? event.result ?? null;
@@ -1078,12 +1350,14 @@ async function streamConstruction(request, response) {
   });
 
   child.on("error", (error) => {
+    clearInterval(heartbeat);
     const text = `${invocation.command} could not be started: ${error.message}`;
     send({ type: "error", text });
     void rememberConversation({ role: "error", text });
   });
 
   child.on("close", async (code, signal) => {
+    clearInterval(heartbeat);
     activeRun = null;
 
     if (sessions.codex || sessions.claude) {
@@ -1187,11 +1461,35 @@ async function streamRehearsal(request, response) {
   let stderrBuffer = "";
   let claudeReport = "";
   let providerErrorSent = false;
+  const claudeToolUses = new Map();
+  let lastActivityAt = Date.now();
+  let lastActivityText = `Starting a fresh, read-only ${
+    agent === "codex" ? "Codex" : "Claude"
+  } rehearsal`;
+  const sendActivity = (progress) => {
+    lastActivityAt = Date.now();
+    lastActivityText = progress.text;
+    send({ type: "activity", ...progress });
+  };
+  const heartbeat = setInterval(() => {
+    if (child.exitCode !== null || child.killed) return;
+    const quietSeconds = Math.max(
+      1,
+      Math.floor((Date.now() - lastActivityAt) / 1_000),
+    );
+    send({
+      type: "heartbeat",
+      text: "Agent is still working",
+      detail: `${quietSeconds}s since the last event · ${lastActivityText}`,
+      kind: "heartbeat",
+      status: "active",
+    });
+  }, 15_000);
 
   const handleEvent = (event) => {
     if (agent === "codex") {
       const progress = codexActivity(event, "test");
-      if (progress) send({ type: "activity", ...progress });
+      if (progress) sendActivity(progress);
       if (event.type === "turn.failed" || event.type === "error") {
         providerErrorSent = true;
         const text = readableProviderError(event, agent);
@@ -1201,17 +1499,8 @@ async function streamRehearsal(request, response) {
       return;
     }
 
-    if (event.type === "assistant") {
-      const blocks = event.message?.content ?? [];
-      blocks
-        .filter((block) => block.type === "tool_use")
-        .forEach((tool) =>
-          send({
-            type: "activity",
-            ...claudeToolActivity(tool, "test"),
-            status: "active",
-          }),
-        );
+    for (const progress of claudeActivities(event, "test", claudeToolUses)) {
+      sendActivity(progress);
     }
     if (event.type === "result") {
       if (event.result) claudeReport = event.result;
@@ -1243,12 +1532,14 @@ async function streamRehearsal(request, response) {
   });
 
   child.on("error", (error) => {
+    clearInterval(heartbeat);
     const text = `${invocation.command} could not be started: ${error.message}`;
     send({ type: "error", text });
     void rememberConversation({ role: "error", text });
   });
 
   child.on("close", async (code, signal) => {
+    clearInterval(heartbeat);
     activeRun = null;
     const interrupted = signal === "SIGTERM";
 
@@ -1394,14 +1685,22 @@ async function streamRuntime(request, response) {
 
   const publishActivity = (activity) => {
     const entry = {
-      id: `${run.id}-activity-${run.activities.length + 1}`,
+      id: activity.id ?? `${run.id}-activity-${run.activities.length + 1}`,
       at: new Date().toISOString(),
       text: activity.text,
       detail: activity.detail ?? null,
+      output: activity.output ?? null,
       kind: activity.kind ?? "activity",
       status: activity.status ?? "active",
     };
-    run.activities.push(entry);
+    const existingIndex = run.activities.findIndex(
+      (candidate) => candidate.id === entry.id,
+    );
+    if (existingIndex === -1) {
+      run.activities.push(entry);
+    } else {
+      run.activities[existingIndex] = entry;
+    }
     send({ type: "activity", ...entry });
   };
   publishActivity({
@@ -1442,6 +1741,37 @@ async function streamRuntime(request, response) {
       let finalSummary = "";
       let discoveredSessionId = null;
       let providerError = "";
+      let lastActivityAt = Date.now();
+      let lastActivityText = `Starting loop iteration ${iterationNumber}`;
+      const claudeToolUses = new Map();
+
+      const publishWorkerActivity = (progress) => {
+        lastActivityAt = Date.now();
+        lastActivityText = progress.text;
+        publishActivity({
+          ...progress,
+          id: progress.id
+            ? `${run.id}-iteration-${iterationNumber}-${progress.id}`
+            : undefined,
+        });
+      };
+
+      const heartbeat = setInterval(() => {
+        if (child.exitCode !== null || child.killed) return;
+        const quietSeconds = Math.max(
+          1,
+          Math.floor((Date.now() - lastActivityAt) / 1_000),
+        );
+        send({
+          type: "heartbeat",
+          id: `${run.id}-iteration-${iterationNumber}-heartbeat`,
+          at: new Date().toISOString(),
+          text: "Agent is still working",
+          detail: `${quietSeconds}s since the last event · ${lastActivityText}`,
+          kind: "heartbeat",
+          status: "active",
+        });
+      }, 15_000);
 
       const handleEvent = (event) => {
         if (agent === "codex") {
@@ -1449,7 +1779,7 @@ async function streamRuntime(request, response) {
             discoveredSessionId = event.thread_id;
           }
           const progress = codexActivity(event, "runtime");
-          if (progress) publishActivity(progress);
+          if (progress) publishWorkerActivity(progress);
           if (
             event.type === "item.completed" &&
             event.item?.type === "agent_message"
@@ -1471,16 +1801,12 @@ async function streamRuntime(request, response) {
         ) {
           discoveredSessionId = event.session_id;
         }
-        if (event.type === "assistant") {
-          const blocks = event.message?.content ?? [];
-          blocks
-            .filter((block) => block.type === "tool_use")
-            .forEach((tool) =>
-              publishActivity({
-                ...claudeToolActivity(tool, "runtime"),
-                status: "active",
-              }),
-            );
+        for (const progress of claudeActivities(
+          event,
+          "runtime",
+          claudeToolUses,
+        )) {
+          publishWorkerActivity(progress);
         }
         if (event.type === "result") {
           if (event.result) {
@@ -1513,11 +1839,13 @@ async function streamRuntime(request, response) {
       });
 
       child.on("error", (error) => {
+        clearInterval(heartbeat);
         providerError = `${invocation.command} could not be started: ${error.message}`;
         send({ type: "error", text: providerError });
       });
 
       child.on("close", (code, signal) => {
+        clearInterval(heartbeat);
         if (activeRun?.runId === run.id) activeRun.child = null;
         const interrupted =
           signal === "SIGTERM" || activeRun?.stopRequested === true;

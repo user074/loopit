@@ -86,8 +86,9 @@ interface ActivityEntry {
   at: string | null;
   text: string;
   detail: string | null;
+  output: string | null;
   kind: string;
-  status: "active" | "complete";
+  status: "active" | "complete" | "error";
 }
 
 interface RuntimeRun {
@@ -391,8 +392,14 @@ function activityEntry(event: Record<string, unknown>): ActivityEntry {
     at: typeof event.at === "string" ? event.at : null,
     text: String(event.text || "Agent is working"),
     detail: typeof event.detail === "string" ? event.detail : null,
+    output: typeof event.output === "string" ? event.output : null,
     kind: typeof event.kind === "string" ? event.kind : "activity",
-    status: event.status === "complete" ? "complete" : "active",
+    status:
+      event.status === "complete"
+        ? "complete"
+        : event.status === "error"
+          ? "error"
+          : "active",
   };
 }
 
@@ -400,7 +407,8 @@ function appendActivity(
   current: ActivityEntry[],
   event: Record<string, unknown>,
 ) {
-  return [...current, activityEntry(event)].slice(-24);
+  const next = activityEntry(event);
+  return [...current.filter((entry) => entry.id !== next.id), next].slice(-100);
 }
 
 function upsertRuntimeRun(current: RuntimeRun[], next: RuntimeRun) {
@@ -414,24 +422,67 @@ function upsertRuntimeRun(current: RuntimeRun[], next: RuntimeRun) {
 function ActivityFeed({
   entries,
   label,
+  limit = 8,
+  roomy = false,
+  showTime = false,
 }: {
   entries: ActivityEntry[];
   label: string;
+  limit?: number;
+  roomy?: boolean;
+  showTime?: boolean;
 }) {
+  const [showAll, setShowAll] = useState(false);
   if (!entries.length) return null;
+  const visibleEntries = showAll ? entries : entries.slice(-limit);
   return (
-    <div aria-label={label} aria-live="polite" className="activity-feed" role="log">
-      {entries.slice(-8).map((entry) => (
+    <div
+      aria-label={label}
+      aria-live="polite"
+      className={`activity-feed${roomy ? " is-roomy" : ""}`}
+      role="log"
+    >
+      {visibleEntries.map((entry) => (
         <div className={`activity-entry is-${entry.status}`} key={entry.id}>
           <span aria-hidden="true">
-            {entry.status === "complete" ? "✓" : "·"}
+            {entry.status === "complete"
+              ? "✓"
+              : entry.status === "error"
+                ? "!"
+                : "·"}
           </span>
           <div>
-            <strong>{entry.text}</strong>
-            {entry.detail && <small>{entry.detail}</small>}
+            <header>
+              <strong>{entry.text}</strong>
+              {showTime && entry.at && (
+                <time dateTime={entry.at}>
+                  {new Intl.DateTimeFormat(undefined, {
+                    hour: "numeric",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  }).format(new Date(entry.at))}
+                </time>
+              )}
+            </header>
+            {entry.detail && <small title={entry.detail}>{entry.detail}</small>}
+            {entry.output && (
+              <details className="activity-output">
+                <summary>View details</summary>
+                <pre>{entry.output}</pre>
+              </details>
+            )}
           </div>
         </div>
       ))}
+      {entries.length > limit && (
+        <button
+          className="activity-feed-toggle"
+          onClick={() => setShowAll((current) => !current)}
+          type="button"
+        >
+          {showAll ? "Show recent activity" : `View all ${entries.length} events`}
+        </button>
+      )}
     </div>
   );
 }
@@ -1432,6 +1483,7 @@ export function LoopStudio({
   const [isWorking, setIsWorking] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [activity, setActivity] = useState("Ready");
+  const [activityNote, setActivityNote] = useState<string | null>(null);
   const [constructionActivities, setConstructionActivities] = useState<
     ActivityEntry[]
   >([]);
@@ -1446,6 +1498,8 @@ export function LoopStudio({
   const [testedTransitionIds, setTestedTransitionIds] = useState<string[]>([]);
   const [isAgentTesting, setIsAgentTesting] = useState(false);
   const [agentTestActivity, setAgentTestActivity] = useState("Ready");
+  const [agentTestActivityNote, setAgentTestActivityNote] =
+    useState<string | null>(null);
   const [testActivities, setTestActivities] = useState<ActivityEntry[]>([]);
   const [agentTest, setAgentTest] = useState<AgentTestResult | null>(null);
   const [unifiedTestStage, setUnifiedTestStage] =
@@ -1462,6 +1516,8 @@ export function LoopStudio({
   const [runtimeRun, setRuntimeRun] = useState<RuntimeRun | null>(null);
   const [runtimeRuns, setRuntimeRuns] = useState<RuntimeRun[]>([]);
   const [runtimeActivity, setRuntimeActivity] = useState("Ready to start");
+  const [runtimeActivityNote, setRuntimeActivityNote] =
+    useState<string | null>(null);
   const [runtimeActivities, setRuntimeActivities] = useState<ActivityEntry[]>([]);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [runtimeClock, setRuntimeClock] = useState(0);
@@ -1546,6 +1602,16 @@ export function LoopStudio({
         setRuntimeRun(payload.run);
         setRuntimeRuns(payload.runs ?? (payload.run ? [payload.run] : []));
         setRuntimeActivities(payload.run?.activities ?? []);
+        const latestActivity = payload.run?.activities?.at(-1);
+        if (payload.run) {
+          setRuntimeActivity(
+            latestActivity?.text ??
+              (payload.run.active ? "Agent is working" : `Run ${payload.run.status}`),
+          );
+          setRuntimeActivityNote(
+            latestActivity?.detail ?? payload.run.summary ?? null,
+          );
+        }
       }
     } catch {
       setActivity("Local bridge is offline");
@@ -1583,7 +1649,13 @@ export function LoopStudio({
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, activity]);
+  }, [
+    messages,
+    activity,
+    constructionActivities.length,
+    runtimeActivities.length,
+    runtimeActivity,
+  ]);
 
   useEffect(() => {
     wiringTestRunRef.current += 1;
@@ -1657,6 +1729,7 @@ export function LoopStudio({
       setSelectedStateId(null);
       setIsHistoryOpen(false);
       setActivity("Ready");
+      setActivityNote(null);
     } catch (error) {
       setMessages((current) => [
         ...current,
@@ -1695,6 +1768,7 @@ export function LoopStudio({
       setSelectedStateId(null);
       setIsHistoryOpen(false);
       setActivity("Ready");
+      setActivityNote(null);
     } catch (error) {
       setMessages((current) => [
         ...current,
@@ -1737,6 +1811,7 @@ export function LoopStudio({
     setInput("");
     setIsWorking(true);
     setActivity(`Starting ${agent === "codex" ? "Codex" : "Claude"}`);
+    setActivityNote("Connecting to the local agent");
     setConstructionActivities([]);
     let finalAgentText: string | null = null;
 
@@ -1775,11 +1850,20 @@ export function LoopStudio({
           if (!dataLine) continue;
           const event = JSON.parse(dataLine.slice(6));
 
-          if (event.type === "status" || event.type === "activity") {
+          if (
+            event.type === "status" ||
+            event.type === "activity" ||
+            event.type === "heartbeat"
+          ) {
             setActivity(event.text);
-            setConstructionActivities((current) =>
-              appendActivity(current, event),
+            setActivityNote(
+              typeof event.detail === "string" ? event.detail : null,
             );
+            if (event.type !== "heartbeat") {
+              setConstructionActivities((current) =>
+                appendActivity(current, event),
+              );
+            }
           }
           if (event.type === "agent_message") {
             finalAgentText = event.text;
@@ -1803,6 +1887,7 @@ export function LoopStudio({
           }
           if (event.type === "done") {
             setActivity(event.interrupted ? "Agent stopped" : "Ready");
+            setActivityNote(null);
           }
         }
       }
@@ -2222,6 +2307,7 @@ export function LoopStudio({
     setAgentTestActivity(
       `Starting a fresh, read-only ${agent === "codex" ? "Codex" : "Claude"} rehearsal`,
     );
+    setAgentTestActivityNote("Connecting to the local test worker");
     setTestActivities([]);
 
     try {
@@ -2251,9 +2337,18 @@ export function LoopStudio({
             .find((line) => line.startsWith("data: "));
           if (!dataLine) continue;
           const event = JSON.parse(dataLine.slice(6));
-          if (event.type === "status" || event.type === "activity") {
+          if (
+            event.type === "status" ||
+            event.type === "activity" ||
+            event.type === "heartbeat"
+          ) {
             setAgentTestActivity(event.text);
-            setTestActivities((current) => appendActivity(current, event));
+            setAgentTestActivityNote(
+              typeof event.detail === "string" ? event.detail : null,
+            );
+            if (event.type !== "heartbeat") {
+              setTestActivities((current) => appendActivity(current, event));
+            }
           }
           if (event.type === "test_report") {
             resultForResolution = event.result as AgentTestResult;
@@ -2268,6 +2363,7 @@ export function LoopStudio({
           }
           if (event.type === "done") {
             setAgentTestActivity(event.interrupted ? "Rehearsal stopped" : "Ready");
+            setAgentTestActivityNote(null);
           }
         }
       }
@@ -2279,6 +2375,7 @@ export function LoopStudio({
       setMessages((current) => [...current, newMessage("error", text)]);
       rememberUiMessage("error", text);
       setAgentTestActivity("Rehearsal unavailable");
+      setAgentTestActivityNote(null);
       return null;
     } finally {
       setIsAgentTesting(false);
@@ -2530,6 +2627,7 @@ ${exactTraceFindings}`;
     }
     setRuntimeError(null);
     setRuntimeActivity("Starting continuous runtime");
+    setRuntimeActivityNote("Connecting to the local worker");
     setRuntimeActivities([]);
 
     try {
@@ -2560,7 +2658,16 @@ ${exactTraceFindings}`;
           const event = JSON.parse(dataLine.slice(6));
           if (event.type === "activity") {
             setRuntimeActivity(event.text);
+            setRuntimeActivityNote(
+              typeof event.detail === "string" ? event.detail : null,
+            );
             setRuntimeActivities((current) => appendActivity(current, event));
+          }
+          if (event.type === "heartbeat") {
+            setRuntimeActivity(event.text);
+            setRuntimeActivityNote(
+              typeof event.detail === "string" ? event.detail : null,
+            );
           }
           if (event.type === "run_started" || event.type === "run_updated") {
             const nextRun = event.run as RuntimeRun;
@@ -2572,6 +2679,7 @@ ${exactTraceFindings}`;
           }
           if (event.type === "agent_message") {
             setRuntimeActivity("Worker report saved");
+            setRuntimeActivityNote("Preparing the durable iteration handoff");
           }
           if (event.type === "iteration_completed") {
             const iteration = event.iteration as RuntimeIteration;
@@ -2605,6 +2713,7 @@ ${exactTraceFindings}`;
             setRuntimeActivity(
               `Loop iteration ${iteration.number} completed · starting ${iteration.next}`,
             );
+            setRuntimeActivityNote(iteration.completed);
           }
           if (event.type === "error") {
             setRuntimeError(event.text);
@@ -2622,6 +2731,7 @@ ${exactTraceFindings}`;
 
   const stopRuntime = async () => {
     setRuntimeActivity("Stopping the loop worker");
+    setRuntimeActivityNote("Completed artifacts and iteration history will remain");
     await interrupt();
   };
 
@@ -2758,13 +2868,68 @@ ${exactTraceFindings}`;
               <div className="agent-activity-card">
                 <div className="agent-activity">
                   <span className="pulse-dot" />
-                  <strong>{activity}</strong>
+                  <div>
+                    <strong>{activity}</strong>
+                    {activityNote && <small>{activityNote}</small>}
+                  </div>
                 </div>
                 <ActivityFeed
                   entries={constructionActivities}
                   label="Construction agent activity"
                 />
               </div>
+            )}
+            {runtimeRun && runtimeActivities.length > 0 && (
+              <section
+                className={`live-agent-transcript${
+                  isRuntimeRunning ? " is-running" : ""
+                }`}
+                aria-label={
+                  isRuntimeRunning
+                    ? "Live worker transcript"
+                    : "Most recent worker transcript"
+                }
+              >
+                <header>
+                  <div>
+                    <span className="eyebrow">
+                      {isRuntimeRunning ? "Live work" : "Last worker"}
+                    </span>
+                    <strong>
+                      {runtimeRun.agent === "claude" ? "Claude" : "Codex"} ·
+                      iteration {runtimeRun.currentIteration ?? 1}
+                    </strong>
+                  </div>
+                  <span className={`runtime-transcript-status is-${runtimeRun.status}`}>
+                    {isRuntimeRunning ? "Running" : runtimeRun.status}
+                  </span>
+                </header>
+                <div className="live-agent-now">
+                  {isRuntimeRunning && <span className="pulse-dot" />}
+                  <div>
+                    <strong>{runtimeActivity}</strong>
+                    {runtimeActivityNote && <small>{runtimeActivityNote}</small>}
+                  </div>
+                  {isRuntimeRunning && (
+                    <button onClick={() => void stopRuntime()} type="button">
+                      Stop
+                    </button>
+                  )}
+                </div>
+                <ActivityFeed
+                  entries={runtimeActivities}
+                  label="Worker operational transcript"
+                  limit={12}
+                  roomy
+                  showTime
+                />
+                {!isRuntimeRunning && runtimeRun.summary && (
+                  <details className="live-agent-report">
+                    <summary>View final worker report</summary>
+                    <p>{runtimeRun.summary}</p>
+                  </details>
+                )}
+              </section>
             )}
             <div ref={messagesEndRef} />
           </div>
@@ -3321,6 +3486,9 @@ ${exactTraceFindings}`;
                         <div>
                           <strong>Fresh-agent rehearsal</strong>
                           <p>{agentTestActivity}</p>
+                          {agentTestActivityNote && (
+                            <small>{agentTestActivityNote}</small>
+                          )}
                         </div>
                         <ActivityFeed
                           entries={testActivities}

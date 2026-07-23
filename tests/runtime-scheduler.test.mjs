@@ -76,7 +76,29 @@ const report = [
   "Reason: " + (continuing ? "Objective-backed work remains." : "The next action requires human permission."),
 ].join("\\n");
 process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "fake-" + count }) + "\\n");
+process.stdout.write(JSON.stringify({ type: "turn.started" }) + "\\n");
+process.stdout.write(JSON.stringify({
+  type: "item.started",
+  item: { type: "command_execution", command: "npm test" },
+}) + "\\n");
+process.stdout.write(JSON.stringify({
+  type: "item.completed",
+  item: {
+    type: "command_execution",
+    command: "npm test",
+    aggregated_output: "18 tests passed",
+    exit_code: 0,
+  },
+}) + "\\n");
+process.stdout.write(JSON.stringify({
+  type: "item.completed",
+  item: { type: "web_search", query: "official project documentation" },
+}) + "\\n");
 process.stdout.write(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: report } }) + "\\n");
+process.stdout.write(JSON.stringify({
+  type: "turn.completed",
+  usage: { input_tokens: 120, output_tokens: 40 },
+}) + "\\n");
 `,
     "utf8",
   );
@@ -142,6 +164,11 @@ Verdict: PASS
   assert.equal(response.status, 200);
   const events = await response.text();
   assert.equal(events.match(/"type":"iteration_completed"/g)?.length, 2);
+  assert.match(events, /"text":"Running project command"/);
+  assert.match(events, /"text":"Project command finished"/);
+  assert.match(events, /"output":"18 tests passed"/);
+  assert.match(events, /"text":"Web search finished"/);
+  assert.match(events, /"text":"Agent turn finished"/);
 
   const latestResponse = await fetch(`${origin}/api/run`);
   const { run, runs } = await latestResponse.json();

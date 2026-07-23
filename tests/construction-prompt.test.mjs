@@ -153,6 +153,12 @@ test("runtime is gated by the current passed revision and uses a separate worker
   assert.match(daemon, /activeRun\?\.purpose === "runtime"/);
   assert.match(daemon, /status: run\.status === "running" && !active/);
   assert.match(daemon, /publishActivity/);
+  assert.match(daemon, /function claudeActivities/);
+  assert.match(daemon, /Claude is retrying a provider request/);
+  assert.match(daemon, /aggregated_output/);
+  assert.match(daemon, /Agent reported progress/);
+  assert.match(daemon, /Agent is still working/);
+  assert.match(daemon, /Deliberately do not expose thinking blocks/);
   assert.match(daemon, /## Activity/);
 });
 

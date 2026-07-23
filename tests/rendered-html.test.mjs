@@ -119,6 +119,11 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.match(studio, /completed across/);
   assert.match(studio, /will start the next worker automatically/);
   assert.match(studio, /Live agent activity/);
+  assert.match(studio, /Live worker transcript/);
+  assert.match(studio, /Worker operational transcript/);
+  assert.match(studio, /View final worker report/);
+  assert.match(studio, /View all \$\{entries\.length\} events/);
+  assert.match(studio, /event\.type === "heartbeat"/);
   assert.match(studio, /Construction agent activity/);
   assert.match(studio, /Loop test activity/);
   assert.match(studio, /activity-feed/);
