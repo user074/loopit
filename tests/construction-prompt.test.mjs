@@ -21,6 +21,8 @@ test("README presents the Codex and GPT-5.6 Sol conversation as the build proces
   assert.match(readme, /git clone https:\/\/github\.com\/user074\/loopit\.git/);
   assert.match(readme, /npm link/);
   assert.match(readme, /Then open a terminal[\s\S]*```bash\nloopit\n```/);
+  assert.match(readme, /Every Codex and Claude construction turn starts fresh/);
+  assert.match(readme, /saved Markdown conversation plus the current `loop\.md`/);
   assert.doesNotMatch(readme, /LOOPIT_CODEX_MODEL=/);
 });
 
@@ -104,10 +106,28 @@ test("construction uses a machine-constrained loop handoff", () => {
   assert.match(daemon, /Return only the structured response required by the supplied output schema/);
   assert.match(daemon, /Loopit validates that response and serializes the loop into canonical Markdown/);
   assert.match(daemon, /"--json-schema"/);
-  assert.equal(daemon.match(/"--output-schema"/g)?.length, 2);
+  assert.equal(daemon.match(/"--output-schema"/g)?.length, 1);
   assert.match(daemon, /constructionSchemaPath/);
   assert.match(daemon, /applyConstructionResult/);
   assert.match(daemon, /"--sandbox",\s*"read-only"/);
+});
+
+test("first launch discovers the repository before creating a loop", () => {
+  assert.match(daemon, /Inspect the repository before asking the user to describe it from scratch/);
+  assert.match(daemon, /state your understanding of what the repository is building or doing/);
+  assert.match(daemon, /ask the user to confirm or correct that understanding/i);
+  assert.match(daemon, /Do not generate the first loop before the user has confirmed/);
+});
+
+test("Codex and Claude construction use durable Loopit history instead of resume", () => {
+  const claudeBranch = daemon.match(
+    /if \(agent === "claude"\) \{([\s\S]*?)return \{ command: "claude", args, input: prompt \};/,
+  )?.[1] ?? "";
+  assert.match(claudeBranch, /"--json-schema"/);
+  assert.doesNotMatch(claudeBranch, /"--resume"/);
+  assert.doesNotMatch(daemon, /"resume"/);
+  assert.match(daemon, /constructionConversationContext/);
+  assert.match(daemon, /Saved Loopit conversation context/);
 });
 
 test("construction testing has a reachable passed outcome", () => {
@@ -139,8 +159,8 @@ test("runtime is gated by the current passed revision and uses a separate worker
 test("Codex accepts explicitly selected projects before Git initialization", () => {
   assert.equal(
     daemon.match(/"--skip-git-repo-check"/g)?.length,
-    4,
-    "construction, resumed construction, rehearsal, and runtime must all accept a new project directory",
+    3,
+    "construction, rehearsal, and runtime must all accept a new project directory",
   );
   assert.match(daemon, /"--sandbox",\s*"workspace-write"/);
   assert.match(daemon, /"--sandbox",\s*"read-only"/);

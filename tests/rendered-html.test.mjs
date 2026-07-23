@@ -73,6 +73,9 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.match(studio, /FLOW_ZOOM_LABEL/);
   assert.match(studio, /FLOW_ZOOM_DESCRIPTION/);
   assert.match(studio, /How the work continues/);
+  assert.match(studio, /Edit selected step/);
+  assert.match(studio, /\+ Add step/);
+  assert.match(studio, /flow-node-edit/);
   assert.match(studio, /StartingWorkPanel/);
   assert.match(studio, /What matters first/);
   assert.match(studio, /Starting work/);
@@ -110,8 +113,10 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.match(studio, /runtime-launch/);
   assert.match(studio, /Continuous runtime/);
   assert.match(studio, /Loop progress/);
-  assert.match(studio, /Iteration completed/);
+  assert.match(studio, /Run \{iteration\.runNumber\} · iteration/);
   assert.match(studio, /runtimeIterations/);
+  assert.match(studio, /runtimeProgressIterations/);
+  assert.match(studio, /completed across/);
   assert.match(studio, /will start the next worker automatically/);
   assert.match(studio, /Live agent activity/);
   assert.match(studio, /Construction agent activity/);
@@ -123,6 +128,8 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.match(studio, /Pass Test this loop for revision/);
   assert.match(studio, /fetch\(`\$\{DAEMON_URL\}\/api\/run`/);
   assert.match(studio, /Start loop/);
+  assert.match(studio, /Inspect this repository and propose its loop/);
+  assert.match(studio, /Understanding this repository/);
   assert.match(studio, /MAX_AUTOMATIC_REPAIRS = 3/);
   assert.match(studio, /Automatic repair.*created revision/);
   assert.match(studio, /seenLoopSignatures/);

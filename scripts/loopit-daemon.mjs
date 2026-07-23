@@ -353,13 +353,8 @@ async function writeRun(run) {
   await writeText(runPath(run.id), serializeRunMarkdown(run));
 }
 
-async function readLatestRunOrNull() {
-  const files = (await readdir(runsDir))
-    .filter((name) => /^run-\d+-[a-f0-9-]+\.md$/.test(name))
-    .sort();
-  const latest = files.at(-1);
-  if (!latest) return null;
-  const markdown = await readFile(path.join(runsDir, latest), "utf8");
+async function readRunFile(name) {
+  const markdown = await readFile(path.join(runsDir, name), "utf8");
   const frontMatter = markdown.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
   const values = {};
   for (const line of frontMatter?.[1].split(/\r?\n/) ?? []) {
@@ -382,7 +377,7 @@ async function readLatestRunOrNull() {
     .map((line, index) => {
       const [at = "", text = "", ...detail] = line.slice(2).split(" — ");
       return {
-        id: `${values["run-id"] ?? latest}-${index}`,
+        id: `${values["run-id"] ?? name}-${index}`,
         at,
         text,
         detail: detail.join(" — ") || null,
@@ -391,7 +386,7 @@ async function readLatestRunOrNull() {
       };
     });
   return {
-    id: values["run-id"] ?? latest.slice(0, -3),
+    id: values["run-id"] ?? name.slice(0, -3),
     loopRevision: Number(values["loop-revision"]) || null,
     agent: values.agent ?? "codex",
     status: values.status ?? "stopped",
@@ -402,6 +397,14 @@ async function readLatestRunOrNull() {
     activities,
     iterations: parseRuntimeIterations(markdown),
   };
+}
+
+async function readRuns() {
+  const files = (await readdir(runsDir))
+    .filter((name) => /^run-\d+-[a-f0-9-]+\.md$/.test(name))
+    .sort()
+    .reverse();
+  return Promise.all(files.slice(0, 20).map((name) => readRunFile(name)));
 }
 
 async function detectAgent(command) {
@@ -446,7 +449,31 @@ async function readBody(request) {
   return body ? JSON.parse(body) : {};
 }
 
-function constructionPrompt({ message, selectedElementId }) {
+function constructionConversationContext(source) {
+  const messages = parseConversationMarkdown(source)
+    .filter((item) => item.role === "user" || item.role === "agent")
+    .slice(-12);
+  if (!messages.length) return "No earlier construction messages.";
+  return messages
+    .map((item) => {
+      const label =
+        item.role === "user"
+          ? "User"
+          : item.source === "claude"
+            ? "Claude"
+            : "Codex";
+      const text = String(item.text ?? "").slice(0, 2400);
+      return `${label}: ${text}`;
+    })
+    .join("\n\n")
+    .slice(-16_000);
+}
+
+function constructionPrompt({
+  message,
+  selectedElementId,
+  conversationContext,
+}) {
   const selected = selectedElementId
     ? `The user currently selected loop element: ${selectedElementId}.`
     : "The user has not selected a particular loop element.";
@@ -455,7 +482,11 @@ function constructionPrompt({ message, selectedElementId }) {
 
 Your only task is to help the user construct and debug a minimal continuing-work loop. You may inspect this repository and its README for context. Work read-only: do not modify .loopit/loop.md or any project file, and do not execute the proposed loop. Return only the structured response required by the supplied output schema. Loopit validates that response and serializes the loop into canonical Markdown itself, so enum values, IDs, and required fields cannot drift into an unparseable document.
 
-If .loopit/loop.md does not exist, this is first-time initialization. Do not treat the missing file as an error. If the user has not stated a concrete objective yet, return action "ask", one focused question in message, and null loop; do not invent a loop prematurely. Once the objective is clear enough, return action "update", a complete loop object, and a concise explanation in message. Return action "no-change" and null loop when the user only needs an explanation and no durable change is needed.
+If .loopit/loop.md does not exist, this is first-time initialization. Do not treat the missing file as an error. Inspect the repository before asking the user to describe it from scratch. Read its README, manifest, source layout, tests, plans, reports, or other representative files when they exist.
+- If the repository has meaningful project content and the saved conversation does not yet contain the user's confirmation, return action "ask" with null loop. Concisely state your understanding of what the repository is building or doing, its current state, the concrete work that appears to matter next, and the recognizable recurring workflow you propose. Then ask the user to confirm or correct that understanding.
+- If the user confirms that repository-derived understanding, return action "update" with the complete loop object in that same turn.
+- If the repository is empty or does not reveal a meaningful objective, return action "ask", one focused question about what the user wants to create or keep progressing, and null loop.
+Do not generate the first loop before the user has confirmed either the repository-derived understanding or an objective they supplied directly. Return action "no-change" and null loop when the user only needs an explanation and no durable change is needed.
 
 Before drafting, explicitly distinguish two things:
 - The product, system, organization, or outcome being described.
@@ -509,11 +540,14 @@ Construction principles:
 
 ${selected}
 
+Saved Loopit conversation context:
+${conversationContext}
+
 User message:
 ${message}`;
 }
 
-function commandFor(agent, sessionId, prompt) {
+function commandFor(agent, prompt) {
   if (agent === "claude") {
     const args = [
       "-p",
@@ -529,31 +563,12 @@ function commandFor(agent, sessionId, prompt) {
       "--disallowedTools",
       "Bash,Edit,Write",
     ];
-    if (sessionId) args.push("--resume", sessionId);
     return { command: "claude", args, input: prompt };
   }
 
   const modelArgs = process.env.LOOPIT_CODEX_MODEL
     ? ["--model", process.env.LOOPIT_CODEX_MODEL]
     : [];
-
-  if (sessionId) {
-    return {
-      command: "codex",
-      args: [
-        "exec",
-        "resume",
-        "--json",
-        "--skip-git-repo-check",
-        "--output-schema",
-        constructionSchemaPath,
-        ...modelArgs,
-        sessionId,
-        "-",
-      ],
-      input: prompt,
-    };
-  }
 
   return {
     command: "codex",
@@ -967,6 +982,9 @@ async function streamConstruction(request, response) {
 
   const conversationStore = await readConversationStore();
   const conversationId = conversationStore.activeConversationId;
+  const conversationContext = constructionConversationContext(
+    await readConversationSource(conversationId),
+  );
 
   await rememberConversation({
     role: "user",
@@ -974,12 +992,12 @@ async function streamConstruction(request, response) {
   }, conversationId);
 
   const sessions = conversationStore.conversations[conversationId] ?? {};
-  const sessionId = sessions?.[agent]?.sessionId ?? null;
   const prompt = constructionPrompt({
     message,
     selectedElementId: body.selectedElementId,
+    conversationContext,
   });
-  const invocation = commandFor(agent, sessionId, prompt);
+  const invocation = commandFor(agent, prompt);
 
   send({ type: "status", text: `Starting ${agent === "codex" ? "Codex" : "Claude"}` });
 
@@ -993,15 +1011,11 @@ async function streamConstruction(request, response) {
   activeRun = { child, agent };
   let stdoutBuffer = "";
   let stderrBuffer = "";
-  let discoveredSessionId = sessionId;
   let constructionResultValue = null;
   let providerErrorSent = false;
 
   const handleEvent = async (event) => {
     if (agent === "codex") {
-      if (event.type === "thread.started" && event.thread_id) {
-        discoveredSessionId = event.thread_id;
-      }
       const progress = codexActivity(event, "construction");
       if (progress) send({ type: "activity", ...progress });
       if (event.type === "item.completed" && event.item?.type === "agent_message") {
@@ -1022,9 +1036,6 @@ async function streamConstruction(request, response) {
       return;
     }
 
-    if (event.type === "system" && event.subtype === "init" && event.session_id) {
-      discoveredSessionId = event.session_id;
-    }
     if (event.type === "assistant") {
       const blocks = event.message?.content ?? [];
       blocks
@@ -1075,11 +1086,9 @@ async function streamConstruction(request, response) {
   child.on("close", async (code, signal) => {
     activeRun = null;
 
-    if (discoveredSessionId) {
-      sessions[agent] = {
-        sessionId: discoveredSessionId,
-        updatedAt: new Date().toISOString(),
-      };
+    if (sessions.codex || sessions.claude) {
+      delete sessions.codex;
+      delete sessions.claude;
       conversationStore.conversations[conversationId] = sessions;
       await writeJson(sessionPath, conversationStore);
     }
@@ -1698,7 +1707,8 @@ const server = http.createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/api/run") {
-      const run = await readLatestRunOrNull();
+      const runs = await readRuns();
+      const run = runs.at(0) ?? null;
       const active = Boolean(
         run &&
           activeRun?.purpose === "runtime" &&
@@ -1717,6 +1727,22 @@ const server = http.createServer(async (request, response) => {
                 : run.status,
             }
           : null,
+        runs: runs.map((item) => {
+          const itemActive = Boolean(
+            activeRun?.purpose === "runtime" && activeRun.runId === item.id,
+          );
+          return {
+            ...item,
+            active: itemActive,
+            activities: itemActive
+              ? activeRun.activities ?? item.activities ?? []
+              : item.activities ?? [],
+            status:
+              item.status === "running" && !itemActive
+                ? "interrupted"
+                : item.status,
+          };
+        }),
       });
       return;
     }

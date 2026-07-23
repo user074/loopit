@@ -1354,6 +1354,20 @@ p {
   font-size: 10px;
 }
 
+.flow-toolbar-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.flow-toolbar-actions > .button-secondary {
+  min-height: 32px;
+  font-size: 10px;
+  font-weight: 750;
+}
+
 .flow-zoom {
   display: grid;
   grid-template-columns: 30px minmax(78px, auto) 30px;
@@ -1414,8 +1428,33 @@ p {
 }
 
 .flow-row-main {
-  display: block;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
   width: 100%;
+}
+
+.flow-node-edit {
+  min-height: 34px;
+  padding: 7px 9px;
+  border: 1px solid #d8dcd6;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #52605a;
+  font-size: 9px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.flow-node-edit:hover {
+  border-color: #6f9f82;
+  color: var(--green);
+}
+
+.flow-node-edit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .flow-state-node {
@@ -3257,13 +3296,17 @@ p {
     flex-direction: column;
   }
 
+  .flow-toolbar-actions {
+    justify-content: flex-start;
+  }
+
   .flow-zoom {
     align-self: flex-start;
   }
 
   .flow-row-main,
   .flow-level-0 .flow-row-main {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 7px;
   }
 

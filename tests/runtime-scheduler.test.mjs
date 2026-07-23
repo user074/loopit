@@ -144,7 +144,7 @@ Verdict: PASS
   assert.equal(events.match(/"type":"iteration_completed"/g)?.length, 2);
 
   const latestResponse = await fetch(`${origin}/api/run`);
-  const { run } = await latestResponse.json();
+  const { run, runs } = await latestResponse.json();
   assert.equal(run.active, false);
   assert.equal(run.status, "paused");
   assert.equal(run.iterations.length, 2);
@@ -152,6 +152,7 @@ Verdict: PASS
   assert.equal(run.iterations[0].next, "Feature two");
   assert.equal(run.iterations[1].completed, "Feature two");
   assert.equal(run.iterations[1].outcome, "pause");
+  assert.equal(runs.length, 1);
   assert.equal(await readFile(countPath, "utf8"), "2");
 
   const runMarkdown = await readFile(
@@ -161,4 +162,25 @@ Verdict: PASS
   assert.match(runMarkdown, /## Completed iterations/);
   assert.match(runMarkdown, /### Iteration 1/);
   assert.match(runMarkdown, /### Iteration 2/);
+
+  const restartedResponse = await fetch(`${origin}/api/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agent: "codex" }),
+  });
+  assert.equal(restartedResponse.status, 200);
+  await restartedResponse.text();
+
+  const historyResponse = await fetch(`${origin}/api/run`);
+  const history = await historyResponse.json();
+  assert.equal(history.runs.length, 2);
+  assert.equal(
+    history.runs.reduce(
+      (total, item) => total + item.iterations.length,
+      0,
+    ),
+    3,
+  );
+  assert.equal(history.runs[0].iterations[0].completed, "Feature two");
+  assert.equal(history.runs[1].iterations[0].completed, "Feature one");
 });

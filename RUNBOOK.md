@@ -70,12 +70,12 @@ The development wrapper sends a termination signal to both the web interface and
 Stopping Loopit preserves these files in the target project when they have been created:
 
 - `.loopit/loop.md`, the versionable, agent-readable loop proposal.
-- `.loopit/session.json`, the active-conversation pointer and resumable local-agent session identifiers.
+- `.loopit/session.json`, the active-conversation pointer and conversation index. Construction context itself lives in the readable Markdown conversation files; both Codex and Claude receive that durable history in a fresh turn.
 - `.loopit/conversations/*.md`, the readable local conversation histories shown after a page reload or selected from **History**.
 - `.loopit/test-report.md`, the latest fresh-agent rehearsal report.
 - `.loopit/runs/*.md`, readable continuous-run records with each completed iteration, completed work, next state, next work, activity, and latest worker report.
 
-Use **New** in the conversation header to start an empty conversation with a fresh Codex or Claude session. The current conversation moves into **History** rather than being destroyed. Selecting a past conversation restores both its visible messages and its own local-agent session. Conversation switching does not delete or replace `.loopit/loop.md`; all conversations in the project discuss the same current loop definition.
+Use **New** in the conversation header to start an empty construction conversation. The current conversation moves into **History** rather than being destroyed. Selecting a past conversation restores its visible messages, and Loopit supplies that saved Markdown history to a fresh Codex or Claude turn. Conversation switching does not delete or replace `.loopit/loop.md`; all conversations in the project discuss the same current loop definition.
 
 ## Test a loop before running it
 

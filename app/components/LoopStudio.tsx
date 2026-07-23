@@ -22,7 +22,7 @@ import {
 const DAEMON_URL = "http://127.0.0.1:4318";
 const MAX_AUTOMATIC_REPAIRS = 3;
 const START_CONSTRUCTION =
-  "Begin first-time loop construction. No loop exists yet. Ask me one focused question about what work I want to keep progressing. Once the objective is clear, complete the proposal in this turn: list the specific hypotheses, features, design questions, opportunities, cases, or equivalent that I will actually track; choose one exact first task; propose the recognizable recurring work cycle; and specify the separate setup needed to begin. Inspect what exists, choose safe reversible defaults, and do not make me ask again for initial work, methods, models, tools, baselines, or tests.";
+  "Begin repository-first loop construction. No loop exists yet. Inspect the repository before asking me to describe it. If meaningful project content exists, explain your understanding of what this repository is building or doing, its current state, the concrete work that appears to matter next, and the recognizable recurring workflow you propose. Ask me to confirm or correct that understanding, and do not generate loop.md until I confirm it. If the repository is empty, ask one focused question about what I want to create or keep progressing.";
 const RESOLVE_TEST_FAILURE = `The latest .loopit/test-report.md found unresolved preflight issues. Treat this result as the next construction action, never as a reason to stop.
 
 Read both .loopit/loop.md and .loopit/test-report.md. Classify every issue by ownership:
@@ -113,6 +113,11 @@ interface RuntimeIteration {
   reason: string;
   startedAt: string | null;
   finishedAt: string | null;
+}
+
+interface RuntimeProgressIteration extends RuntimeIteration {
+  runId: string;
+  runNumber: number;
 }
 
 interface WiringTestStep {
@@ -396,6 +401,14 @@ function appendActivity(
   event: Record<string, unknown>,
 ) {
   return [...current, activityEntry(event)].slice(-24);
+}
+
+function upsertRuntimeRun(current: RuntimeRun[], next: RuntimeRun) {
+  return [next, ...current.filter((run) => run.id !== next.id)].sort((left, right) =>
+    String(right.startedAt ?? right.id).localeCompare(
+      String(left.startedAt ?? left.id),
+    ),
+  );
 }
 
 function ActivityFeed({
@@ -1129,24 +1142,46 @@ function StateFlowCanvas({
           <h3>How the work continues</h3>
           {zoom > 0 && <p>{FLOW_ZOOM_DESCRIPTION[zoom]}</p>}
         </div>
-        <div className="flow-zoom" aria-label="Change flow detail level">
+        <div className="flow-toolbar-actions">
           <button
-            aria-label="Zoom out"
-            disabled={zoom === 0}
-            onClick={() => changeZoom(-1)}
+            className="button-secondary"
+            disabled={disabled || !focusedState}
+            onClick={() => {
+              if (!focusedState) return;
+              onZoomChange(2);
+              onEdit(focusedState.id);
+            }}
             type="button"
           >
-            −
+            Edit selected step
           </button>
-          <span>{FLOW_ZOOM_LABEL[zoom]}</span>
           <button
-            aria-label="Zoom in"
-            disabled={zoom === 2}
-            onClick={() => changeZoom(1)}
+            className="button-secondary"
+            disabled={disabled || !sequence.loopBack}
+            onClick={onAddStep}
             type="button"
           >
-            +
+            + Add step
           </button>
+          <div className="flow-zoom" aria-label="Change flow detail level">
+            <button
+              aria-label="Zoom out"
+              disabled={zoom === 0}
+              onClick={() => changeZoom(-1)}
+              type="button"
+            >
+              −
+            </button>
+            <span>{FLOW_ZOOM_LABEL[zoom]}</span>
+            <button
+              aria-label="Zoom in"
+              disabled={zoom === 2}
+              onClick={() => changeZoom(1)}
+              type="button"
+            >
+              +
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1190,6 +1225,19 @@ function StateFlowCanvas({
                         Repeat from here
                       </span>
                     )}
+                  </button>
+                  <button
+                    aria-label={`Edit ${state.name}`}
+                    className="flow-node-edit"
+                    disabled={disabled}
+                    onClick={() => {
+                      onFocus(state.id);
+                      onZoomChange(2);
+                      onEdit(state.id);
+                    }}
+                    type="button"
+                  >
+                    Edit
                   </button>
                 </div>
 
@@ -1361,16 +1409,6 @@ function StateFlowCanvas({
         </section>
       )}
 
-      {sequence.loopBack && (
-        <button
-          className="add-step-button"
-          disabled={disabled}
-          onClick={onAddStep}
-          type="button"
-        >
-          + Add a domain step before the loop repeats
-        </button>
-      )}
     </>
   );
 }
@@ -1422,6 +1460,7 @@ export function LoopStudio({
   const [isHumanReviewSubmitting, setIsHumanReviewSubmitting] = useState(false);
   const [humanReviewError, setHumanReviewError] = useState<string | null>(null);
   const [runtimeRun, setRuntimeRun] = useState<RuntimeRun | null>(null);
+  const [runtimeRuns, setRuntimeRuns] = useState<RuntimeRun[]>([]);
   const [runtimeActivity, setRuntimeActivity] = useState("Ready to start");
   const [runtimeActivities, setRuntimeActivities] = useState<ActivityEntry[]>([]);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
@@ -1429,6 +1468,14 @@ export function LoopStudio({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wiringTestRunRef = useRef(0);
   const unifiedTestRunRef = useRef(0);
+  const autoDiscoveryConversationRef = useRef<string | null>(null);
+  const sendMessageRef = useRef<
+    ((
+      textOverride?: string,
+      displayText?: string,
+      allowDuringTest?: boolean,
+    ) => Promise<string | null>) | null
+  >(null);
 
   const sequence = useMemo(
     () => (loop ? primarySequence(loop) : null),
@@ -1494,8 +1541,10 @@ export function LoopStudio({
       if (runResponse.ok) {
         const payload = (await runResponse.json()) as {
           run: RuntimeRun | null;
+          runs?: RuntimeRun[];
         };
         setRuntimeRun(payload.run);
+        setRuntimeRuns(payload.runs ?? (payload.run ? [payload.run] : []));
         setRuntimeActivities(payload.run?.activities ?? []);
       }
     } catch {
@@ -1519,9 +1568,13 @@ export function LoopStudio({
     const pollRuntime = async () => {
       const response = await fetch(`${DAEMON_URL}/api/run`).catch(() => null);
       if (!response?.ok) return;
-      const payload = (await response.json()) as { run: RuntimeRun | null };
+      const payload = (await response.json()) as {
+        run: RuntimeRun | null;
+        runs?: RuntimeRun[];
+      };
       if (!payload.run) return;
       setRuntimeRun(payload.run);
+      setRuntimeRuns(payload.runs ?? [payload.run]);
       setRuntimeActivities(payload.run.activities ?? []);
     };
     const timer = window.setInterval(() => void pollRuntime(), 2000);
@@ -1775,6 +1828,34 @@ export function LoopStudio({
     return finalAgentText;
   };
 
+  sendMessageRef.current = sendMessage;
+
+  useEffect(() => {
+    if (
+      !health?.ok ||
+      loop ||
+      !activeConversationId ||
+      messages.length > 0 ||
+      isWorking ||
+      isConversationChanging ||
+      autoDiscoveryConversationRef.current === activeConversationId
+    ) {
+      return;
+    }
+    autoDiscoveryConversationRef.current = activeConversationId;
+    void sendMessageRef.current?.(
+      START_CONSTRUCTION,
+      "Inspect this repository and propose its loop",
+    );
+  }, [
+    activeConversationId,
+    health?.ok,
+    isConversationChanging,
+    isWorking,
+    loop,
+    messages.length,
+  ]);
+
   const persistLoop = async (
     nextLoop: LoopDefinition,
     note: string,
@@ -1952,6 +2033,22 @@ export function LoopStudio({
       )
     : 0;
   const runtimeIterations = runtimeRun?.iterations ?? [];
+  const displayedRuntimeRuns = runtimeRun
+    ? upsertRuntimeRun(runtimeRuns, runtimeRun)
+    : runtimeRuns;
+  const chronologicalRuntimeRuns = [...displayedRuntimeRuns].sort((left, right) =>
+    String(left.startedAt ?? left.id).localeCompare(
+      String(right.startedAt ?? right.id),
+    ),
+  );
+  const runtimeProgressIterations: RuntimeProgressIteration[] =
+    chronologicalRuntimeRuns.flatMap((run, runIndex) =>
+      (run.iterations ?? []).map((iteration) => ({
+        ...iteration,
+        runId: run.id,
+        runNumber: runIndex + 1,
+      })),
+    );
   const currentRuntimeIteration =
     runtimeRun?.currentIteration ?? runtimeIterations.length + 1;
   const testPanelLabel = isUnifiedTestRunning
@@ -2466,7 +2563,9 @@ ${exactTraceFindings}`;
             setRuntimeActivities((current) => appendActivity(current, event));
           }
           if (event.type === "run_started" || event.type === "run_updated") {
-            setRuntimeRun(event.run as RuntimeRun);
+            const nextRun = event.run as RuntimeRun;
+            setRuntimeRun(nextRun);
+            setRuntimeRuns((current) => upsertRuntimeRun(current, nextRun));
             if (Array.isArray(event.run.activities)) {
               setRuntimeActivities(event.run.activities as ActivityEntry[]);
             }
@@ -2476,6 +2575,33 @@ ${exactTraceFindings}`;
           }
           if (event.type === "iteration_completed") {
             const iteration = event.iteration as RuntimeIteration;
+            setRuntimeRun((current) => {
+              if (!current) return current;
+              return {
+                ...current,
+                iterations: [
+                  ...(current.iterations ?? []).filter(
+                    (item) => item.number !== iteration.number,
+                  ),
+                  iteration,
+                ].sort((left, right) => left.number - right.number),
+              };
+            });
+            setRuntimeRuns((runs) =>
+              runs.map((run, index) =>
+                index === 0 || run.active
+                  ? {
+                      ...run,
+                      iterations: [
+                        ...(run.iterations ?? []).filter(
+                          (item) => item.number !== iteration.number,
+                        ),
+                        iteration,
+                      ].sort((left, right) => left.number - right.number),
+                    }
+                  : run,
+              ),
+            );
             setRuntimeActivity(
               `Loop iteration ${iteration.number} completed · starting ${iteration.next}`,
             );
@@ -2497,7 +2623,6 @@ ${exactTraceFindings}`;
   const stopRuntime = async () => {
     setRuntimeActivity("Stopping the loop worker");
     await interrupt();
-    await refresh();
   };
 
   return (
@@ -2806,22 +2931,26 @@ ${exactTraceFindings}`;
                 <span>1</span><i>→</i><span>2</span><i>↺</i>
               </div>
               <span className="eyebrow">Your loop</span>
-              <h2>No loop yet</h2>
+              <h2>{isWorking ? "Understanding this repository" : "No loop yet"}</h2>
               <p>
-                First, tell the agent what you want to keep progressing. It will
-                ask questions and propose the smallest loop that can continue.
+                {isWorking
+                  ? "The agent is reading the project, identifying its current work, and preparing a workflow for you to confirm."
+                  : "Loopit can inspect this repository first, explain what it appears to do, and propose a recurring workflow for you to confirm."}
               </p>
               <button
                 className="button-primary button-large"
                 disabled={isWorking}
                 onClick={() =>
-                  void sendMessage(START_CONSTRUCTION, "Construct my first loop")
+                  void sendMessage(
+                    START_CONSTRUCTION,
+                    "Inspect this repository and propose its loop",
+                  )
                 }
                 type="button"
               >
-                Construct my first loop
+                {isWorking ? "Inspecting repository…" : "Inspect repository"}
               </button>
-              <small>Nothing is created until the objective is clear.</small>
+              <small>Nothing is created until you confirm the agent’s understanding.</small>
             </div>
           )}
 
@@ -3317,7 +3446,7 @@ ${exactTraceFindings}`;
                     </strong>
                     <p>
                       {isRuntimeRunning
-                        ? `${runtimeIterations.length} loop ${runtimeIterations.length === 1 ? "iteration" : "iterations"} completed. Loopit will start the next worker automatically unless a real boundary is reached.`
+                        ? `${runtimeProgressIterations.length} loop ${runtimeProgressIterations.length === 1 ? "iteration" : "iterations"} completed across all runs. Loopit will start the next worker automatically unless a real boundary is reached.`
                         : health?.ok !== true
                           ? "Runtime stays locked until the local daemon identifies the repository the agent will modify."
                           : health.runtimeAllowed === false
@@ -3351,13 +3480,15 @@ ${exactTraceFindings}`;
                     </button>
                   )}
                 </div>
-                {(isRuntimeRunning || runtimeIterations.length > 0) && (
+                {(isRuntimeRunning || runtimeProgressIterations.length > 0) && (
                   <section className="runtime-iterations" aria-label="Completed loop iterations">
                     <header>
                       <div>
                         <strong>Loop progress</strong>
                         <span>
-                          {runtimeIterations.length} completed
+                          {runtimeProgressIterations.length} completed across{" "}
+                          {displayedRuntimeRuns.length}{" "}
+                          {displayedRuntimeRuns.length === 1 ? "run" : "runs"}
                           {isRuntimeRunning && ` · iteration ${currentRuntimeIteration} running`}
                         </span>
                       </div>
@@ -3377,12 +3508,17 @@ ${exactTraceFindings}`;
                           </div>
                         </li>
                       )}
-                      {[...runtimeIterations].reverse().map((iteration) => (
-                        <li className={`is-${iteration.outcome}`} key={iteration.number}>
+                      {[...runtimeProgressIterations].reverse().map((iteration) => (
+                        <li
+                          className={`is-${iteration.outcome}`}
+                          key={`${iteration.runId}-${iteration.number}`}
+                        >
                           <span>{iteration.number}</span>
                           <div>
                             <header>
-                              <small>Iteration completed</small>
+                              <small>
+                                Run {iteration.runNumber} · iteration {iteration.number}
+                              </small>
                               <em>
                                 {iteration.outcome === "continue"
                                   ? "Continuing"
