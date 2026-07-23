@@ -114,11 +114,116 @@ interface RuntimeIteration {
   reason: string;
   startedAt: string | null;
   finishedAt: string | null;
+  reportPath?: string;
+  stateVersion?: number;
+  progress?: "advanced" | "learned" | "neutral" | "regressed";
 }
 
 interface RuntimeProgressIteration extends RuntimeIteration {
   runId: string;
   runNumber: number;
+}
+
+interface RuntimeStateItem {
+  id: string;
+  kind: "artifact" | "belief" | "failure" | "uncertainty";
+  name: string;
+  status: string;
+  summary: string;
+  evidence: string[];
+}
+
+interface RuntimeFrontierItem {
+  id: string;
+  title: string;
+  status: "ready" | "active" | "waiting" | "retired";
+  priority: number;
+  objectiveLink: string;
+  causedBy: string;
+  retirementEvidence: string;
+}
+
+interface RuntimeDecision {
+  id: string;
+  question: string;
+  status: "waiting" | "resolved" | "deferred";
+  context: string;
+  recommendation: string;
+}
+
+interface RuntimeState {
+  version: number;
+  loopRevision: number;
+  updatedAt: string;
+  status: string;
+  autonomy: {
+    mode: "guided" | "unattended";
+    runUntil: string | null;
+    maxIterations: number | null;
+  };
+  direction: {
+    northStar: string;
+    currentDirection: string;
+    currentObjective: string;
+    better: string[];
+    hardRequirements: string[];
+    flexibleRequirements: string[];
+  };
+  items: RuntimeStateItem[];
+  frontier: RuntimeFrontierItem[];
+  decisions: RuntimeDecision[];
+  activeAssignment: {
+    id: string;
+    frontierId: string;
+    title: string;
+    objective: string;
+    status: string;
+    startedAt: string;
+    reportPath: string;
+  } | null;
+}
+
+interface RuntimeLedgerEntry {
+  number: number;
+  title: string;
+  id: string;
+  runId: string;
+  loopRevision: number | null;
+  assignmentId: string;
+  outcome: "continue" | "pause" | "complete";
+  progress: "advanced" | "learned" | "neutral" | "regressed";
+  startedAt: string | null;
+  finishedAt: string | null;
+  fromVersion: number | null;
+  toVersion: number | null;
+  reportPath: string;
+  completed: string;
+  next: string;
+  reason: string;
+  stateChanges: string[];
+  frontierChanges: string[];
+  relaxations: string[];
+}
+
+interface RuntimeSteering {
+  id: string;
+  createdAt: string;
+  status: "pending" | "applied";
+  appliedStateVersion: number | null;
+  directive: string;
+}
+
+interface RuntimeSnapshot {
+  state: RuntimeState | null;
+  ledger: RuntimeLedgerEntry[];
+  steering: RuntimeSteering[];
+  loopRevision: number | null;
+}
+
+interface RuntimeUnderstandingMessage {
+  id: string;
+  role: "user" | "agent" | "steering" | "error";
+  text: string;
 }
 
 interface WiringTestStep {
@@ -130,6 +235,8 @@ interface WiringTestStep {
 
 type WiringTestStatus = "idle" | "running" | "passed" | "failed";
 type TestPathTone = "pending" | "active" | "complete" | "action";
+type WorkspaceMode = "design" | "runtime";
+type RuntimeView = "now" | "state" | "frontier" | "history";
 type UnifiedTestStage =
   | "idle"
   | "tracing"
@@ -1521,6 +1628,17 @@ export function LoopStudio({
   const [runtimeActivities, setRuntimeActivities] = useState<ActivityEntry[]>([]);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [runtimeClock, setRuntimeClock] = useState(0);
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("design");
+  const [runtimeView, setRuntimeView] = useState<RuntimeView>("now");
+  const [runtimeSnapshot, setRuntimeSnapshot] =
+    useState<RuntimeSnapshot | null>(null);
+  const [runtimeDurationHours, setRuntimeDurationHours] = useState(24);
+  const [runtimeUnderstandingInput, setRuntimeUnderstandingInput] = useState("");
+  const [runtimeUnderstandingMessages, setRuntimeUnderstandingMessages] =
+    useState<RuntimeUnderstandingMessage[]>([]);
+  const [isRuntimeUnderstanding, setIsRuntimeUnderstanding] = useState(false);
+  const [runtimeComposerMode, setRuntimeComposerMode] =
+    useState<"ask" | "steer">("ask");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wiringTestRunRef = useRef(0);
   const unifiedTestRunRef = useRef(0);
@@ -1562,12 +1680,14 @@ export function LoopStudio({
         conversationResponse,
         testResponse,
         runResponse,
+        runtimeResponse,
       ] = await Promise.all([
         fetch(`${DAEMON_URL}/api/health`),
         fetch(`${DAEMON_URL}/api/loop`),
         fetch(`${DAEMON_URL}/api/conversation`),
         fetch(`${DAEMON_URL}/api/test`),
         fetch(`${DAEMON_URL}/api/run`),
+        fetch(`${DAEMON_URL}/api/runtime`),
       ]);
       if (healthResponse.ok) {
         const nextHealth = (await healthResponse.json()) as Health;
@@ -1613,6 +1733,11 @@ export function LoopStudio({
           );
         }
       }
+      if (runtimeResponse.ok) {
+        setRuntimeSnapshot(
+          (await runtimeResponse.json()) as RuntimeSnapshot,
+        );
+      }
     } catch {
       setActivity("Local bridge is offline");
     }
@@ -1632,16 +1757,26 @@ export function LoopStudio({
   useEffect(() => {
     if (!isRuntimeRunning) return;
     const pollRuntime = async () => {
-      const response = await fetch(`${DAEMON_URL}/api/run`).catch(() => null);
-      if (!response?.ok) return;
-      const payload = (await response.json()) as {
-        run: RuntimeRun | null;
-        runs?: RuntimeRun[];
-      };
-      if (!payload.run) return;
-      setRuntimeRun(payload.run);
-      setRuntimeRuns(payload.runs ?? [payload.run]);
-      setRuntimeActivities(payload.run.activities ?? []);
+      const [runResponse, stateResponse] = await Promise.all([
+        fetch(`${DAEMON_URL}/api/run`).catch(() => null),
+        fetch(`${DAEMON_URL}/api/runtime`).catch(() => null),
+      ]);
+      if (runResponse?.ok) {
+        const payload = (await runResponse.json()) as {
+          run: RuntimeRun | null;
+          runs?: RuntimeRun[];
+        };
+        if (payload.run) {
+          setRuntimeRun(payload.run);
+          setRuntimeRuns(payload.runs ?? [payload.run]);
+          setRuntimeActivities(payload.run.activities ?? []);
+        }
+      }
+      if (stateResponse?.ok) {
+        setRuntimeSnapshot(
+          (await stateResponse.json()) as RuntimeSnapshot,
+        );
+      }
     };
     const timer = window.setInterval(() => void pollRuntime(), 2000);
     return () => window.clearInterval(timer);
@@ -2629,12 +2764,21 @@ ${exactTraceFindings}`;
     setRuntimeActivity("Starting continuous runtime");
     setRuntimeActivityNote("Connecting to the local worker");
     setRuntimeActivities([]);
+    setWorkspaceMode("runtime");
 
     try {
       const response = await fetch(`${DAEMON_URL}/api/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent }),
+        body: JSON.stringify({
+          agent,
+          autonomyMode:
+            runtimeSnapshot?.state?.autonomy.mode ?? "guided",
+          durationHours:
+            runtimeSnapshot?.state?.autonomy.mode === "unattended"
+              ? runtimeDurationHours
+              : null,
+        }),
       });
       if (!response.ok || !response.body) {
         const payload = await response.json().catch(() => ({}));
@@ -2715,6 +2859,9 @@ ${exactTraceFindings}`;
             );
             setRuntimeActivityNote(iteration.completed);
           }
+          if (event.type === "runtime_state") {
+            setRuntimeSnapshot(event.snapshot as RuntimeSnapshot);
+          }
           if (event.type === "error") {
             setRuntimeError(event.text);
           }
@@ -2726,6 +2873,122 @@ ${exactTraceFindings}`;
       );
     } finally {
       await refresh();
+    }
+  };
+
+  const setRuntimePolicy = async (mode: "guided" | "unattended") => {
+    setRuntimeError(null);
+    try {
+      const response = await fetch(`${DAEMON_URL}/api/runtime/autonomy`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode,
+          durationHours: mode === "unattended" ? runtimeDurationHours : null,
+        }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || "Runtime policy could not be updated.");
+      }
+      setRuntimeSnapshot(payload as RuntimeSnapshot);
+    } catch (error) {
+      setRuntimeError(
+        error instanceof Error
+          ? error.message
+          : "Runtime policy could not be updated.",
+      );
+    }
+  };
+
+  const submitRuntimeComposer = async () => {
+    const text = runtimeUnderstandingInput.trim();
+    if (!text || isRuntimeUnderstanding) return;
+    setRuntimeUnderstandingInput("");
+    setRuntimeError(null);
+
+    if (runtimeComposerMode === "steer") {
+      setRuntimeUnderstandingMessages((current) => [
+        ...current,
+        {
+          id: `${Date.now()}-steering`,
+          role: "steering",
+          text,
+        },
+      ]);
+      try {
+        const response = await fetch(`${DAEMON_URL}/api/runtime/steer`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ directive: text }),
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.error || "The steering direction was not saved.");
+        }
+        setRuntimeSnapshot(payload as RuntimeSnapshot);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "The steering direction failed.";
+        setRuntimeError(message);
+        setRuntimeUnderstandingMessages((current) => [
+          ...current,
+          { id: `${Date.now()}-error`, role: "error", text: message },
+        ]);
+      }
+      return;
+    }
+
+    setIsRuntimeUnderstanding(true);
+    setRuntimeUnderstandingMessages((current) => [
+      ...current,
+      { id: `${Date.now()}-question`, role: "user", text },
+    ]);
+    try {
+      const response = await fetch(`${DAEMON_URL}/api/runtime/understand`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agent, question: text }),
+      });
+      if (!response.ok || !response.body) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || "The runtime agent could not answer.");
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let answer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const packets = buffer.split("\n\n");
+        buffer = packets.pop() ?? "";
+        for (const packet of packets) {
+          const dataLine = packet
+            .split("\n")
+            .find((line) => line.startsWith("data: "));
+          if (!dataLine) continue;
+          const event = JSON.parse(dataLine.slice(6));
+          if (event.type === "answer") answer = event.text;
+          if (event.type === "error") throw new Error(event.text);
+        }
+      }
+      if (answer) {
+        setRuntimeUnderstandingMessages((current) => [
+          ...current,
+          { id: `${Date.now()}-answer`, role: "agent", text: answer },
+        ]);
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "The runtime agent could not answer.";
+      setRuntimeUnderstandingMessages((current) => [
+        ...current,
+        { id: `${Date.now()}-error`, role: "error", text: message },
+      ]);
+    } finally {
+      setIsRuntimeUnderstanding(false);
     }
   };
 
@@ -2745,6 +3008,24 @@ ${exactTraceFindings}`;
             <span>Construct a continuing loop</span>
           </div>
         </div>
+        <nav className="workspace-switcher" aria-label="Loopit workspace">
+          <button
+            className={workspaceMode === "design" ? "is-active" : ""}
+            onClick={() => setWorkspaceMode("design")}
+            type="button"
+          >
+            Design
+          </button>
+          <button
+            className={workspaceMode === "runtime" ? "is-active" : ""}
+            disabled={!loop}
+            onClick={() => setWorkspaceMode("runtime")}
+            type="button"
+          >
+            Runtime
+            {runtimeRun?.active && <span aria-label="running" />}
+          </button>
+        </nav>
         <div
           className={`connection-status ${
             health?.runtimeAllowed === false ? "is-protected" : ""
@@ -2761,6 +3042,7 @@ ${exactTraceFindings}`;
         </div>
       </header>
 
+      {workspaceMode === "design" ? (
       <div className="studio-grid">
         <aside className="chat-panel" aria-label="Loop construction chat">
           <div className="panel-heading">
@@ -3564,7 +3846,7 @@ ${exactTraceFindings}`;
                 </section>
 
               <section
-                className={`runtime-launch ${
+                className={`runtime-launch design-runtime-handoff ${
                   isRuntimeRunning
                     ? "is-running"
                     : canStartRuntime
@@ -3572,6 +3854,25 @@ ${exactTraceFindings}`;
                       : "is-locked"
                 }`}
               >
+                <div className="design-runtime-entry">
+                  <div>
+                    <span className="eyebrow">Next workspace</span>
+                    <h3>Run and control the loop</h3>
+                    <p>
+                      Follow live work, inspect durable state and beliefs,
+                      review iteration reports, ask what changed, and steer
+                      what happens next.
+                    </p>
+                  </div>
+                  <button
+                    className="button-primary button-large"
+                    disabled={!testPassed}
+                    onClick={() => setWorkspaceMode("runtime")}
+                    type="button"
+                  >
+                    Open Runtime
+                  </button>
+                </div>
                 <header>
                   <div>
                     <span className="eyebrow">Runtime</span>
@@ -3740,6 +4041,559 @@ ${exactTraceFindings}`;
           )}
         </section>
       </div>
+      ) : (
+        <section className="runtime-workspace" aria-label="Runtime control plane">
+          <header className="runtime-controlbar">
+            <div>
+              <span className="eyebrow">Runtime control plane</span>
+              <h1>{loop?.name ?? "Runtime"}</h1>
+              <p>
+                {runtimeSnapshot?.state?.direction.currentDirection ??
+                  "Initialize durable state to begin continuous work."}
+              </p>
+            </div>
+            <div className="runtime-controlbar-actions">
+              <div className="runtime-autonomy">
+                <span>Autonomy</span>
+                <div>
+                  <button
+                    className={
+                      runtimeSnapshot?.state?.autonomy.mode !== "unattended"
+                        ? "is-active"
+                        : ""
+                    }
+                    onClick={() => void setRuntimePolicy("guided")}
+                    type="button"
+                  >
+                    Guided
+                  </button>
+                  <button
+                    className={
+                      runtimeSnapshot?.state?.autonomy.mode === "unattended"
+                        ? "is-active"
+                        : ""
+                    }
+                    onClick={() => void setRuntimePolicy("unattended")}
+                    type="button"
+                  >
+                    Unattended
+                  </button>
+                </div>
+              </div>
+              {runtimeSnapshot?.state?.autonomy.mode === "unattended" && (
+                <label className="runtime-duration">
+                  Run for
+                  <select
+                    onChange={(event) =>
+                      setRuntimeDurationHours(Number(event.target.value))
+                    }
+                    value={runtimeDurationHours}
+                  >
+                    <option value={1}>1 hour</option>
+                    <option value={8}>8 hours</option>
+                    <option value={24}>24 hours</option>
+                    <option value={72}>3 days</option>
+                  </select>
+                </label>
+              )}
+              <div className="runtime-clock is-controlbar">
+                <small>{isRuntimeRunning ? "Continuous run" : "Last run"}</small>
+                <time dateTime={`PT${Math.floor(runtimeElapsed / 1000)}S`}>
+                  {formatRuntimeDuration(runtimeElapsed)}
+                </time>
+              </div>
+              {isRuntimeRunning ? (
+                <button
+                  className="button-stop"
+                  onClick={() => void stopRuntime()}
+                  type="button"
+                >
+                  Stop
+                </button>
+              ) : (
+                <button
+                  className="button-primary"
+                  disabled={!canStartRuntime}
+                  onClick={() => void startRuntime()}
+                  type="button"
+                >
+                  Start loop
+                </button>
+              )}
+            </div>
+          </header>
+
+          <div className="runtime-workspace-grid">
+            <aside className="runtime-understanding">
+              <header>
+                <div>
+                  <span className="eyebrow">Understanding & steering</span>
+                  <h2>Ask the runtime</h2>
+                </div>
+                <span className={isRuntimeUnderstanding ? "is-active" : ""}>
+                  {isRuntimeUnderstanding ? "Reading state…" : "Read-only agent"}
+                </span>
+              </header>
+              <div className="runtime-understanding-thread">
+                {runtimeUnderstandingMessages.length === 0 ? (
+                  <div className="runtime-understanding-empty">
+                    <span aria-hidden="true">◎</span>
+                    <strong>Understand an overnight run quickly</strong>
+                    <p>
+                      Ask what changed, what worked, what failed, or why the
+                      next work was selected. Answers cite durable evidence.
+                    </p>
+                    <button
+                      onClick={() =>
+                        setRuntimeUnderstandingInput(
+                          "What is the current state, what changed recently, and what happens next?",
+                        )
+                      }
+                      type="button"
+                    >
+                      Summarize the runtime
+                    </button>
+                  </div>
+                ) : (
+                  runtimeUnderstandingMessages.map((message) => (
+                    <article
+                      className={`runtime-understanding-message is-${message.role}`}
+                      key={message.id}
+                    >
+                      <small>
+                        {message.role === "user"
+                          ? "You"
+                          : message.role === "agent"
+                            ? agent === "codex"
+                              ? "Codex"
+                              : "Claude"
+                            : message.role === "steering"
+                              ? "Steering queued"
+                              : "Error"}
+                      </small>
+                      <p>{message.text}</p>
+                    </article>
+                  ))
+                )}
+              </div>
+              <div className="runtime-composer">
+                <div className="runtime-composer-mode">
+                  <button
+                    className={runtimeComposerMode === "ask" ? "is-active" : ""}
+                    onClick={() => setRuntimeComposerMode("ask")}
+                    type="button"
+                  >
+                    Ask
+                  </button>
+                  <button
+                    className={
+                      runtimeComposerMode === "steer" ? "is-active" : ""
+                    }
+                    onClick={() => setRuntimeComposerMode("steer")}
+                    type="button"
+                  >
+                    Steer
+                  </button>
+                </div>
+                <textarea
+                  disabled={isRuntimeUnderstanding}
+                  onChange={(event) =>
+                    setRuntimeUnderstandingInput(event.target.value)
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      void submitRuntimeComposer();
+                    }
+                  }}
+                  placeholder={
+                    runtimeComposerMode === "ask"
+                      ? "What changed in the last three iterations?"
+                      : "Prioritize accessibility before adding another feature."
+                  }
+                  rows={3}
+                  value={runtimeUnderstandingInput}
+                />
+                <button
+                  className="button-primary"
+                  disabled={
+                    !runtimeUnderstandingInput.trim() || isRuntimeUnderstanding
+                  }
+                  onClick={() => void submitRuntimeComposer()}
+                  type="button"
+                >
+                  {runtimeComposerMode === "ask" ? "Ask runtime" : "Queue steering"}
+                </button>
+              </div>
+            </aside>
+
+            <section className="runtime-dashboard">
+              <nav className="runtime-view-tabs" aria-label="Runtime views">
+                {(["now", "state", "frontier", "history"] as RuntimeView[]).map(
+                  (view) => (
+                    <button
+                      className={runtimeView === view ? "is-active" : ""}
+                      key={view}
+                      onClick={() => setRuntimeView(view)}
+                      type="button"
+                    >
+                      {view === "now"
+                        ? "Now"
+                        : view === "state"
+                          ? "State"
+                          : view === "frontier"
+                            ? "Next work"
+                            : "History"}
+                    </button>
+                  ),
+                )}
+              </nav>
+
+              <div className="runtime-view">
+                {runtimeView === "now" && (
+                  <>
+                    <section className="runtime-now-hero">
+                      <div>
+                        <span
+                          className={`runtime-status-dot is-${runtimeSnapshot?.state?.status ?? "ready"}`}
+                        />
+                        <div>
+                          <small>Current objective</small>
+                          <h2>
+                            {runtimeSnapshot?.state?.direction.currentObjective ??
+                              "No current objective"}
+                          </h2>
+                        </div>
+                      </div>
+                      <span>
+                        State v{runtimeSnapshot?.state?.version ?? "—"} ·{" "}
+                        {runtimeSnapshot?.state?.status ?? "not initialized"}
+                      </span>
+                    </section>
+
+                    <div className="runtime-now-grid">
+                      <section className="runtime-focus-card">
+                        <span className="eyebrow">Active assignment</span>
+                        {runtimeSnapshot?.state?.activeAssignment ? (
+                          <>
+                            <h3>
+                              {runtimeSnapshot.state.activeAssignment.title}
+                            </h3>
+                            <p>
+                              {runtimeSnapshot.state.activeAssignment.objective}
+                            </p>
+                            <dl>
+                              <div>
+                                <dt>Status</dt>
+                                <dd>
+                                  {runtimeSnapshot.state.activeAssignment.status}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt>Report</dt>
+                                <dd>
+                                  {runtimeSnapshot.state.activeAssignment
+                                    .reportPath || "Pending"}
+                                </dd>
+                              </div>
+                            </dl>
+                          </>
+                        ) : (
+                          <>
+                            <h3>
+                              {isRuntimeRunning
+                                ? runtimeActivity
+                                : "No assignment is active"}
+                            </h3>
+                            <p>
+                              {isRuntimeRunning
+                                ? runtimeActivityNote
+                                : runtimeSnapshot?.state?.status === "completed"
+                                  ? "The objective has reached its completion policy."
+                                  : "Start the loop to lease the highest-priority ready work."}
+                            </p>
+                          </>
+                        )}
+                      </section>
+
+                      <section className="runtime-focus-card">
+                        <span className="eyebrow">Latest result</span>
+                        {runtimeSnapshot?.ledger.at(-1) ? (
+                          <>
+                            <h3>{runtimeSnapshot.ledger.at(-1)?.completed}</h3>
+                            <p>{runtimeSnapshot.ledger.at(-1)?.reason}</p>
+                            <dl>
+                              <div>
+                                <dt>Progress</dt>
+                                <dd>{runtimeSnapshot.ledger.at(-1)?.progress}</dd>
+                              </div>
+                              <div>
+                                <dt>Next</dt>
+                                <dd>{runtimeSnapshot.ledger.at(-1)?.next}</dd>
+                              </div>
+                            </dl>
+                          </>
+                        ) : (
+                          <>
+                            <h3>No integrated result yet</h3>
+                            <p>
+                              The first completed assignment will appear here
+                              with its evidence and state change.
+                            </p>
+                          </>
+                        )}
+                      </section>
+                    </div>
+
+                    <section className="runtime-live-card">
+                      <header>
+                        <div>
+                          <strong>
+                            {isRuntimeRunning
+                              ? "Live agent activity"
+                              : "Last run activity"}
+                          </strong>
+                          <span>
+                            {runtimeActivities.length} recorded events
+                          </span>
+                        </div>
+                        {isRuntimeRunning && <i>Live</i>}
+                      </header>
+                      {runtimeActivities.length ? (
+                        <ActivityFeed
+                          entries={runtimeActivities}
+                          label="Runtime agent activity"
+                        />
+                      ) : (
+                        <p className="runtime-empty-copy">
+                          Start the loop to see file reads, edits, commands,
+                          tests, worker reports, and state integration.
+                        </p>
+                      )}
+                    </section>
+                  </>
+                )}
+
+                {runtimeView === "state" && (
+                  <>
+                    <section className="runtime-direction-card">
+                      <span className="eyebrow">North star</span>
+                      <h2>
+                        {runtimeSnapshot?.state?.direction.northStar ??
+                          loop?.objective}
+                      </h2>
+                      <p>
+                        {runtimeSnapshot?.state?.direction.currentDirection}
+                      </p>
+                    </section>
+                    <div className="runtime-state-groups">
+                      {(["artifact", "belief", "failure", "uncertainty"] as const).map(
+                        (kind) => {
+                          const items =
+                            runtimeSnapshot?.state?.items.filter(
+                              (item) => item.kind === kind,
+                            ) ?? [];
+                          if (!items.length) return null;
+                          return (
+                            <section key={kind}>
+                              <header>
+                                <h3>
+                                  {kind === "artifact"
+                                    ? "What exists"
+                                    : kind === "belief"
+                                      ? "What we believe"
+                                      : kind === "failure"
+                                        ? "Known failures"
+                                        : "Uncertainty"}
+                                </h3>
+                                <span>{items.length}</span>
+                              </header>
+                              {items.map((item) => (
+                                <article key={item.id}>
+                                  <div>
+                                    <strong>{item.name}</strong>
+                                    <span>{item.status}</span>
+                                  </div>
+                                  <p>{item.summary}</p>
+                                  {item.evidence.length > 0 && (
+                                    <details>
+                                      <summary>
+                                        Evidence · {item.evidence.length}
+                                      </summary>
+                                      <ul>
+                                        {item.evidence.map((evidence) => (
+                                          <li key={evidence}>{evidence}</li>
+                                        ))}
+                                      </ul>
+                                    </details>
+                                  )}
+                                </article>
+                              ))}
+                            </section>
+                          );
+                        },
+                      )}
+                    </div>
+                  </>
+                )}
+
+                {runtimeView === "frontier" && (
+                  <>
+                    <section className="runtime-frontier-summary">
+                      <div>
+                        <small>Ready</small>
+                        <strong>
+                          {runtimeSnapshot?.state?.frontier.filter(
+                            (item) => item.status === "ready",
+                          ).length ?? 0}
+                        </strong>
+                      </div>
+                      <div>
+                        <small>Waiting</small>
+                        <strong>
+                          {runtimeSnapshot?.state?.frontier.filter(
+                            (item) => item.status === "waiting",
+                          ).length ?? 0}
+                        </strong>
+                      </div>
+                      <div>
+                        <small>Human decisions</small>
+                        <strong>
+                          {runtimeSnapshot?.state?.decisions.filter(
+                            (item) => item.status === "waiting",
+                          ).length ?? 0}
+                        </strong>
+                      </div>
+                    </section>
+                    <section className="runtime-frontier-list">
+                      {(runtimeSnapshot?.state?.frontier ?? [])
+                        .slice()
+                        .sort((left, right) => right.priority - left.priority)
+                        .map((item) => (
+                          <article className={`is-${item.status}`} key={item.id}>
+                            <span>{item.priority}</span>
+                            <div>
+                              <header>
+                                <strong>{item.title}</strong>
+                                <em>{item.status}</em>
+                              </header>
+                              <p>{item.causedBy}</p>
+                              <small>
+                                <b>Done when</b> {item.retirementEvidence}
+                              </small>
+                            </div>
+                          </article>
+                        ))}
+                    </section>
+                    {(runtimeSnapshot?.state?.decisions ?? []).some(
+                      (item) => item.status === "waiting",
+                    ) && (
+                      <section className="runtime-decisions">
+                        <h3>Waiting for human</h3>
+                        {runtimeSnapshot?.state?.decisions
+                          .filter((item) => item.status === "waiting")
+                          .map((item) => (
+                            <article key={item.id}>
+                              <strong>{item.question}</strong>
+                              <p>{item.context}</p>
+                              <small>{item.recommendation}</small>
+                            </article>
+                          ))}
+                      </section>
+                    )}
+                  </>
+                )}
+
+                {runtimeView === "history" && (
+                  <section className="runtime-ledger">
+                    <header>
+                      <div>
+                        <span className="eyebrow">Durable trajectory</span>
+                        <h2>{runtimeSnapshot?.ledger.length ?? 0} iterations</h2>
+                      </div>
+                      <span>Newest first</span>
+                    </header>
+                    {(runtimeSnapshot?.ledger ?? []).length ? (
+                      <ol>
+                        {[...(runtimeSnapshot?.ledger ?? [])]
+                          .reverse()
+                          .map((entry) => (
+                            <li key={entry.id}>
+                              <span>{entry.number}</span>
+                              <article>
+                                <header>
+                                  <div>
+                                    <small>
+                                      Loop r{entry.loopRevision ?? "?"} · state v
+                                      {entry.fromVersion} → v{entry.toVersion}
+                                    </small>
+                                    <h3>{entry.title}</h3>
+                                  </div>
+                                  <em className={`is-${entry.progress}`}>
+                                    {entry.progress}
+                                  </em>
+                                </header>
+                                <strong>{entry.completed}</strong>
+                                <p>{entry.reason}</p>
+                                <dl>
+                                  <div>
+                                    <dt>Next</dt>
+                                    <dd>{entry.next}</dd>
+                                  </div>
+                                  <div>
+                                    <dt>Report</dt>
+                                    <dd>{entry.reportPath}</dd>
+                                  </div>
+                                </dl>
+                                {(entry.stateChanges.length > 0 ||
+                                  entry.frontierChanges.length > 0) && (
+                                  <details>
+                                    <summary>State changes</summary>
+                                    <ul>
+                                      {[
+                                        ...entry.stateChanges,
+                                        ...entry.frontierChanges,
+                                      ].map((change) => (
+                                        <li key={change}>{change}</li>
+                                      ))}
+                                    </ul>
+                                  </details>
+                                )}
+                              </article>
+                            </li>
+                          ))}
+                      </ol>
+                    ) : (
+                      <p className="runtime-empty-copy">
+                        The ledger will record every assignment, report,
+                        evidence-based state change, and next action.
+                      </p>
+                    )}
+                  </section>
+                )}
+              </div>
+
+              {runtimeSnapshot?.steering.some(
+                (entry) => entry.status === "pending",
+              ) && (
+                <aside className="runtime-pending-steering">
+                  <strong>Steering queued</strong>
+                  <p>
+                    {runtimeSnapshot.steering
+                      .filter((entry) => entry.status === "pending")
+                      .at(-1)?.directive}
+                  </p>
+                  <span>
+                    The supervisor will apply this at the next state
+                    integration.
+                  </span>
+                </aside>
+              )}
+              {runtimeError && <p className="runtime-error">{runtimeError}</p>}
+            </section>
+          </div>
+        </section>
+      )}
     </main>
   );
 }

@@ -62,19 +62,98 @@ if (process.argv.includes("--version")) {
   process.exit(0);
 }
 const countPath = process.env.LOOPIT_FAKE_COUNT;
-const count = Number(fs.existsSync(countPath) ? fs.readFileSync(countPath, "utf8") : "0") + 1;
-fs.writeFileSync(countPath, String(count));
-const continuing = count === 1;
-const report = [
-  "Completed one bounded feature and integrated its evidence.",
-  "",
-  "## Loopit iteration",
-  "Outcome: " + (continuing ? "CONTINUE" : "PAUSE"),
-  "State: " + (continuing ? "observe-work" : "await-decision"),
-  "Completed: " + (continuing ? "Feature one" : "Feature two"),
-  "Next: " + (continuing ? "Feature two" : "Approve the external action"),
-  "Reason: " + (continuing ? "Objective-backed work remains." : "The next action requires human permission."),
-].join("\\n");
+const integrating = process.argv.includes("--output-schema");
+const prompt = fs.readFileSync(0, "utf8");
+const understanding = prompt.includes("interactive understanding agent");
+let count = Number(fs.existsSync(countPath) ? fs.readFileSync(countPath, "utf8") : "0");
+if (!integrating && !understanding) {
+  count += 1;
+  fs.writeFileSync(countPath, String(count));
+}
+const applyingSteering = integrating && prompt.includes("Prioritize reliability");
+const continuing = count === 1 || applyingSteering;
+const completed = applyingSteering ? "Reliability steering applied" : continuing ? "Feature one" : "Feature two";
+const nextAction = applyingSteering ? "Feature three reliability work" : continuing ? "Feature two" : "Approve the external action";
+const report = understanding
+  ? "Feature one and feature two are integrated. The next action needs human approval. Evidence: iteration-0002."
+  : integrating
+  ? JSON.stringify({
+      message: applyingSteering ? "Reliability steering is integrated and new work is ready." : continuing ? "Feature one is integrated; feature two is ready." : "Feature two is integrated and external approval is required.",
+      outcome: continuing ? "continue" : "pause",
+      progress: "advanced",
+      completed,
+      nextState: continuing ? "observe-work" : "await-decision",
+      nextAction,
+      reason: continuing ? "Objective-backed work remains." : "The next action requires human permission.",
+      direction: {
+        northStar: "Keep a verified view of the current operating environment.",
+        currentDirection: "Advance the next verified feature.",
+        currentObjective: continuing ? nextAction : "Await external approval.",
+        better: ["Verified useful behavior"],
+        hardRequirements: ["Do not invent evidence"],
+        flexibleRequirements: ["Implementation may change with evidence"]
+      },
+      items: [{
+        id: "working-feature",
+        kind: "artifact",
+        name: completed,
+        status: "verified",
+        summary: "The bounded feature passed its tests.",
+        evidence: [".loopit/runtime/reports/iteration-" + String(count).padStart(4, "0") + ".md"]
+      }],
+      frontier: continuing ? [{
+        id: applyingSteering ? "feature-three-reliability" : "feature-two",
+        title: nextAction,
+        status: "ready",
+        priority: 100,
+        objectiveLink: "Keep a verified view of the current operating environment.",
+        causedBy: applyingSteering ? "Human steering prioritized reliability." : "Feature one exposed the next objective-backed gap.",
+        retirementEvidence: applyingSteering ? "Reliability checks pass." : "Feature two passes its tests."
+      }] : [{
+        id: "external-approval",
+        title: "Approve the external action",
+        status: "waiting",
+        priority: 100,
+        objectiveLink: "Keep a verified view of the current operating environment.",
+        causedBy: "The next action crosses an authority boundary.",
+        retirementEvidence: "A human records explicit approval."
+      }],
+      decisions: continuing ? [] : [{
+        id: "approve-action",
+        question: "Approve the external action?",
+        status: "waiting",
+        context: "The next action crosses an authority boundary.",
+        recommendation: "Review the evidence before approving."
+      }],
+      stateChanges: ["Recorded verified feature evidence."],
+      frontierChanges: [applyingSteering ? "Added feature three reliability work." : continuing ? "Added feature two." : "Moved external approval to waiting."],
+      relaxations: []
+    })
+  : [
+      "# Iteration report",
+      "## Summary",
+      "Completed one bounded feature and collected evidence.",
+      "## Assignment",
+      "The leased feature.",
+      "## Work performed",
+      "Implemented the feature.",
+      "## Deliverables",
+      "Working code.",
+      "## Evidence",
+      "18 tests passed.",
+      "## Outcome",
+      "Status: completed",
+      "## What appears to work",
+      "The feature works.",
+      "## Failures, limitations, and uncertainty",
+      "None.",
+      "## Candidate state updates",
+      "Record the feature.",
+      "## Suggested next work",
+      continuing ? "Feature two." : "Request approval.",
+      "## Provenance",
+      "npm test."
+    ].join("\\n");
 process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "fake-" + count }) + "\\n");
 process.stdout.write(JSON.stringify({ type: "turn.started" }) + "\\n");
 process.stdout.write(JSON.stringify({
@@ -206,8 +285,86 @@ Verdict: PASS
       (total, item) => total + item.iterations.length,
       0,
     ),
-    3,
+    2,
+    JSON.stringify(history.runs),
   );
-  assert.equal(history.runs[0].iterations[0].completed, "Feature two");
+  assert.equal(history.runs[0].iterations.length, 0);
   assert.equal(history.runs[1].iterations[0].completed, "Feature one");
+  assert.equal(await readFile(countPath, "utf8"), "2");
+
+  const runtimeResponse = await fetch(`${origin}/api/runtime`);
+  const runtime = await runtimeResponse.json();
+  assert.equal(runtime.state.version, 5);
+  assert.equal(runtime.state.status, "paused");
+  assert.equal(runtime.state.activeAssignment, null);
+  assert.equal(runtime.ledger.length, 2);
+  assert.equal(runtime.ledger[0].completed, "Feature one");
+  assert.equal(runtime.ledger[1].completed, "Feature two");
+  assert.equal(runtime.state.frontier[0].status, "waiting");
+
+  const stateMarkdown = await readFile(
+    path.join(loopitDir, "runtime", "STATE.md"),
+    "utf8",
+  );
+  const ledgerMarkdown = await readFile(
+    path.join(loopitDir, "runtime", "LEDGER.md"),
+    "utf8",
+  );
+  const firstReport = await readFile(
+    path.join(loopitDir, "runtime", "reports", "iteration-0001.md"),
+    "utf8",
+  );
+  assert.match(stateMarkdown, /# Runtime state/);
+  assert.match(stateMarkdown, /## Frontier/);
+  assert.match(ledgerMarkdown, /## Iteration 1 —/);
+  assert.match(ledgerMarkdown, /## Iteration 2 —/);
+  assert.match(firstReport, /# Iteration report/);
+
+  const steeringResponse = await fetch(`${origin}/api/runtime/steer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      directive: "Prioritize reliability before expanding the feature set.",
+    }),
+  });
+  assert.equal(steeringResponse.status, 200);
+  const steered = await steeringResponse.json();
+  assert.equal(steered.steering.at(-1).status, "pending");
+
+  const steeredRunResponse = await fetch(`${origin}/api/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agent: "codex" }),
+  });
+  assert.equal(steeredRunResponse.status, 200);
+  const steeredEvents = await steeredRunResponse.text();
+  assert.equal(
+    steeredEvents.match(/"type":"iteration_completed"/g)?.length,
+    2,
+  );
+
+  const finalRuntimeResponse = await fetch(`${origin}/api/runtime`);
+  const finalRuntime = await finalRuntimeResponse.json();
+  assert.equal(finalRuntime.ledger.length, 4);
+  assert.equal(finalRuntime.ledger[2].completed, "Reliability steering applied");
+  assert.equal(finalRuntime.steering.at(-1).status, "applied");
+  assert.equal(finalRuntime.steering.at(-1).appliedStateVersion, 7);
+  assert.equal(await readFile(countPath, "utf8"), "3");
+
+  const understandingResponse = await fetch(
+    `${origin}/api/runtime/understand`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        agent: "codex",
+        question: "What changed and what happens next?",
+      }),
+    },
+  );
+  assert.equal(understandingResponse.status, 200);
+  const understandingEvents = await understandingResponse.text();
+  assert.match(understandingEvents, /"type":"answer"/);
+  assert.match(understandingEvents, /Feature one and feature two are integrated/);
+  assert.equal(await readFile(countPath, "utf8"), "3");
 });

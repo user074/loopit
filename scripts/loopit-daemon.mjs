@@ -24,10 +24,22 @@ import {
   serializeLoopMarkdown,
 } from "../lib/loop-markdown.mjs";
 import {
-  parseRuntimeHandoff,
   parseRuntimeIterations,
   serializeRuntimeIterations,
 } from "../lib/runtime-handoff.mjs";
+import {
+  createInitialRuntimeState,
+  integrationState,
+  normalizeRuntimeState,
+  parseRuntimeStateMarkdown,
+  selectRuntimeAssignment,
+  serializeRuntimeAssignment,
+  serializeRuntimeState,
+} from "../lib/runtime-state.mjs";
+import {
+  parseRuntimeLedger,
+  serializeRuntimeLedger,
+} from "../lib/runtime-ledger.mjs";
 
 const execFileAsync = promisify(execFile);
 const daemonAppRoot = path.resolve(
@@ -50,6 +62,15 @@ const constructionSchemaPath = path.join(
   "loop-construction-output.schema.json",
 );
 const constructionOutputSchema = await readFile(constructionSchemaPath, "utf8");
+const runtimeIntegrationSchemaPath = path.join(
+  appRoot,
+  "schemas",
+  "runtime-integration-output.schema.json",
+);
+const runtimeIntegrationOutputSchema = await readFile(
+  runtimeIntegrationSchemaPath,
+  "utf8",
+);
 function containsPath(parent, candidate) {
   const relative = path.relative(parent, candidate);
   return (
@@ -67,6 +88,12 @@ const sessionPath = path.join(loopitDir, "session.json");
 const legacyConversationPath = path.join(loopitDir, "conversation.md");
 const conversationsDir = path.join(loopitDir, "conversations");
 const runsDir = path.join(loopitDir, "runs");
+const runtimeDir = path.join(loopitDir, "runtime");
+const runtimeStatePath = path.join(runtimeDir, "STATE.md");
+const runtimeLedgerPath = path.join(runtimeDir, "LEDGER.md");
+const runtimeAssignmentsDir = path.join(runtimeDir, "assignments");
+const runtimeReportsDir = path.join(runtimeDir, "reports");
+const runtimeSteeringPath = path.join(runtimeDir, "STEERING.md");
 const testReportPath = path.join(loopitDir, "test-report.md");
 const testOutputPath = path.join(loopitDir, ".test-agent-output.tmp");
 const port = Number(process.env.LOOPIT_DAEMON_PORT || 4318);
@@ -76,12 +103,19 @@ const allowedOrigins = new Set([
 ]);
 
 let activeRun = null;
+let activeUnderstanding = null;
 let conversationWriteQueue = Promise.resolve();
 
 await Promise.all([
   mkdir(loopitDir, { recursive: true }),
   mkdir(conversationsDir, { recursive: true }),
   mkdir(runsDir, { recursive: true }),
+  ...(runtimeAllowed
+    ? [
+        mkdir(runtimeAssignmentsDir, { recursive: true }),
+        mkdir(runtimeReportsDir, { recursive: true }),
+      ]
+    : []),
 ]);
 
 async function readJson(file, fallback = null) {
@@ -111,6 +145,123 @@ async function readLoopOrNull() {
     if (error?.code === "ENOENT") return null;
     throw error;
   }
+}
+
+async function readRuntimeStateOrNull() {
+  try {
+    return parseRuntimeStateMarkdown(await readFile(runtimeStatePath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function writeRuntimeState(state) {
+  const normalized = normalizeRuntimeState(state);
+  await writeText(runtimeStatePath, serializeRuntimeState(normalized));
+  return normalized;
+}
+
+async function ensureRuntimeState(loop, autonomy = {}) {
+  const existing = await readRuntimeStateOrNull();
+  if (existing?.loopRevision === loop.revision) {
+    const updated = normalizeRuntimeState({
+      ...existing,
+      autonomy: {
+        ...existing.autonomy,
+        ...autonomy,
+      },
+    });
+    if (JSON.stringify(updated.autonomy) !== JSON.stringify(existing.autonomy)) {
+      return writeRuntimeState({
+        ...updated,
+        version: updated.version + 1,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    return existing;
+  }
+  return writeRuntimeState(createInitialRuntimeState(loop, autonomy));
+}
+
+async function readRuntimeLedger() {
+  try {
+    return parseRuntimeLedger(await readFile(runtimeLedgerPath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+async function writeRuntimeLedger(entries) {
+  await writeText(runtimeLedgerPath, serializeRuntimeLedger(entries));
+}
+
+function parseSteeringMarkdown(markdown) {
+  const directives = [];
+  const pattern =
+    /(?:^|\n)## `([^`]+)`\n- Created: ([^\n]+)\n- Status: `([^`]+)`\n- Applied in state: ([^\n]+)\n\n([\s\S]*?)(?=\n## `|$)/g;
+  for (const match of String(markdown ?? "").matchAll(pattern)) {
+    directives.push({
+      id: match[1].trim(),
+      createdAt: match[2].trim(),
+      status: match[3].trim(),
+      appliedStateVersion:
+        match[4].trim() === "Not yet" ? null : Number(match[4].trim()) || null,
+      directive: match[5].trim(),
+    });
+  }
+  return directives;
+}
+
+function serializeSteeringMarkdown(directives) {
+  const body = directives.length
+    ? directives
+        .map(
+          (entry) => `## \`${entry.id}\`
+- Created: ${entry.createdAt}
+- Status: \`${entry.status}\`
+- Applied in state: ${entry.appliedStateVersion ?? "Not yet"}
+
+${entry.directive}`,
+        )
+        .join("\n\n")
+    : "_No steering directives have been recorded._";
+  return `---
+loopit-runtime-steering: 1
+---
+
+# Runtime steering
+
+${body}
+`;
+}
+
+async function readRuntimeSteering() {
+  try {
+    return parseSteeringMarkdown(await readFile(runtimeSteeringPath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+async function writeRuntimeSteering(directives) {
+  await writeText(runtimeSteeringPath, serializeSteeringMarkdown(directives));
+}
+
+async function runtimeSnapshot(loop = null) {
+  const state = await readRuntimeStateOrNull();
+  const [ledger, steering] = await Promise.all([
+    readRuntimeLedger(),
+    readRuntimeSteering(),
+  ]);
+  return {
+    state,
+    ledger,
+    steering,
+    loopRevision: loop?.revision ?? state?.loopRevision ?? null,
+  };
 }
 
 function newConversationId() {
@@ -647,6 +798,7 @@ function runtimeCommandFor(agent, prompt) {
         "acceptEdits",
         "--allowedTools",
         "Read,Glob,Grep,Edit,Write,Bash",
+        "--no-session-persistence",
       ],
       input: prompt,
     };
@@ -672,26 +824,164 @@ function runtimeCommandFor(agent, prompt) {
   };
 }
 
-function runtimePrompt(runId, iterationNumber) {
-  return `You are the worker for Loopit run ${runId}, iteration ${iterationNumber}. The loop definition has passed construction testing for its current revision.
+function runtimeWorkerPrompt(runId, assignment) {
+  return `You are a bounded worker for Loopit run ${runId}, assignment ${assignment.id}.
 
-Read .loopit/loop.md and .loopit/runs/${runId}.md. Execute the loop; do not redesign it and do not edit .loopit/loop.md, .loopit/test-report.md, conversation history, or any file under .loopit/runs. Loopit owns the run record; put product evidence and continuation state in the domain artifacts declared by the loop.
+Read:
+- .loopit/loop.md for the tested domain workflow and boundaries
+- .loopit/runtime/STATE.md for the current project state
+- .loopit/runtime/assignments/${assignment.id}.md for your exact assignment
 
-${iterationNumber === 1 ? "Begin at the declared start state. Use the declared first work only when durable domain artifacts have not been initialized; otherwise select the latest objective-backed work from the durable state and frontier. Do not restart completed work." : "Resume from the latest completed iteration's Next and State fields plus the durable product state and frontier. Do not restart completed work."} Follow the state instructions, named handoffs, setup, authority boundaries, retry rules, and completion policy. Use durable project artifacts as the source of truth. Perform real project work with the tools available in this local workspace.
+Execute only that assignment against the target project. Follow the profession-specific workflow, produce or update the declared native deliverables, and collect observable evidence. Use the existing repository conventions and safe local tools. A partial, failed, or blocked attempt is still useful when its evidence is recorded honestly.
 
-Complete exactly one useful ordinary recurrence: select the current objective-backed work, produce or update its native deliverable, test or evaluate it, integrate the result into durable state, and update the frontier. A partial, failed, or blocked attempt still completes an iteration when its evidence is integrated and an exact next action is durable. Do not stop merely because one feature implementation or one agent response ended. Never invent credentials, private facts, evidence, or permission, and never bypass an external safeguard.
+Loopit—not this worker—owns integration. Do not edit any file under .loopit/, do not select a different frontier item, and do not declare the overall loop complete. If the assignment becomes blocked, investigate safe alternatives inside the declared authority before reporting the blocker. Never invent credentials, private facts, evidence, or permission, and never bypass an external safeguard.
 
-End with a concise worker report describing the state reached, durable artifacts changed, evidence collected, and exact next state or human decision. Do not claim the overall loop is complete unless its declared completion policy is satisfied.
+End with a detailed Markdown report using these headings:
+# Iteration report
+## Summary
+## Assignment
+## Work performed
+## Deliverables
+## Evidence
+## Outcome
+Status: completed, partial, failed, or blocked
+## What appears to work
+## Failures, limitations, and uncertainty
+## Candidate state updates
+## Suggested next work
+## Provenance
 
-End the report with this exact Markdown section and one-line fields:
-## Loopit iteration
-Outcome: CONTINUE, PAUSE, or COMPLETE
-State: exact next state ID, or the boundary reached
-Completed: the concrete feature, hypothesis, design decision, case, or other domain work completed or advanced in this iteration
-Next: the exact next objective-backed work or human action
-Reason: why the scheduler should continue, pause, or complete
+Name files, commands, test results, and other inspectable evidence. Another agent must be able to audit the result without hidden chat context.`;
+}
 
-Use CONTINUE whenever another justified frontier item or follow-up remains. Use PAUSE only for an explicit human decision, permission boundary, budget boundary, scheduled observation, or unrecoverable blocker. Use COMPLETE only when the loop's declared completion policy has actually accepted the overall objective.`;
+function runtimeIntegrationCommandFor(agent, prompt) {
+  if (agent === "claude") {
+    return {
+      command: "claude",
+      args: [
+        "-p",
+        "--verbose",
+        "--output-format",
+        "stream-json",
+        "--json-schema",
+        runtimeIntegrationOutputSchema,
+        "--permission-mode",
+        "plan",
+        "--allowedTools",
+        "Read,Glob,Grep",
+        "--disallowedTools",
+        "Bash,Edit,Write",
+        "--no-session-persistence",
+      ],
+      input: prompt,
+    };
+  }
+
+  const modelArgs = process.env.LOOPIT_CODEX_MODEL
+    ? ["--model", process.env.LOOPIT_CODEX_MODEL]
+    : [];
+  return {
+    command: "codex",
+    args: [
+      "exec",
+      "--json",
+      "--ephemeral",
+      "--skip-git-repo-check",
+      "--output-schema",
+      runtimeIntegrationSchemaPath,
+      ...modelArgs,
+      "--sandbox",
+      "read-only",
+      "-C",
+      projectRoot,
+      "-",
+    ],
+    input: prompt,
+  };
+}
+
+function runtimeIntegrationPrompt(
+  runId,
+  assignment,
+  pendingSteering,
+  autonomyMode,
+) {
+  const steering = pendingSteering.length
+    ? pendingSteering
+        .map((entry) => `- ${entry.id}: ${entry.directive}`)
+        .join("\n")
+    : "- None.";
+  return `You are the Loopit runtime supervisor integrating one bounded worker result for run ${runId}.
+
+Read .loopit/loop.md, .loopit/runtime/STATE.md, .loopit/runtime/assignments/${assignment.id}.md, .loopit/runtime/reports/${assignment.id}.md, and .loopit/runtime/LEDGER.md when it exists. Inspect referenced project artifacts when needed. You are read-only: Loopit will write the authoritative runtime files from your structured response.
+
+Pending human steering:
+${steering}
+
+Integrate evidence into one complete next-state proposal:
+1. Preserve the north star and hard requirements unless an explicit human steering directive changes them. Flexible requirements may be relaxed when doing so is safe, reversible, objective-aligned, and recorded in relaxations.
+2. Separate what exists from what is believed. Use artifact items for deliverables or operational facts; belief items for evidence-backed understanding; failure and uncertainty items for unresolved negative evidence. Preserve stable IDs for existing concepts and cite inspectable report, file, command, test, or decision evidence.
+3. Retire the active frontier item only when its retirement evidence is met. Otherwise return it as ready or waiting with the new evidence and exact remaining gap.
+4. Add frontier items only when they trace to the objective and to evidence from the report, current state, a failed check, a missing requirement, or explicit human steering. Include observable retirement evidence. Do not create filler work just to keep running.
+5. ${autonomyMode === "unattended" ? "The user enabled unattended autonomy. When useful work remains, generate the best bounded next objective, defer nonessential human decisions, and return continue with at least one ready frontier item. Pause only for credentials, irreversible authority, material cost/risk, the configured run limit, or an unrecoverable blocker." : "Guided mode is active. Continue autonomously through safe objective-backed work. Pause only when the only useful next action needs human intent, permission, private information, material cost/risk, or when the objective is truly ready for its declared completion policy."}
+6. A first draft is not completion. Use complete only when the loop's declared completion policy is actually satisfied. An empty current queue must trigger an objective-gap check: replenish justified work, record a scheduled wait/human decision, or produce a legitimate completion.
+7. Negative outcomes still update the state and should lead to a concrete recovery, narrower experiment, alternative approach, or evidence-backed wait instead of silently stopping.
+
+Return the full next direction, full state item list, full frontier, and full decision list—not a patch. The message should summarize what changed for the human in plain professional language.`;
+}
+
+function runtimeUnderstandingCommandFor(agent, prompt) {
+  if (agent === "claude") {
+    return {
+      command: "claude",
+      args: [
+        "-p",
+        "--verbose",
+        "--output-format",
+        "stream-json",
+        "--permission-mode",
+        "plan",
+        "--allowedTools",
+        "Read,Glob,Grep",
+        "--disallowedTools",
+        "Bash,Edit,Write",
+        "--no-session-persistence",
+      ],
+      input: prompt,
+    };
+  }
+  const modelArgs = process.env.LOOPIT_CODEX_MODEL
+    ? ["--model", process.env.LOOPIT_CODEX_MODEL]
+    : [];
+  return {
+    command: "codex",
+    args: [
+      "exec",
+      "--json",
+      "--ephemeral",
+      "--skip-git-repo-check",
+      ...modelArgs,
+      "--sandbox",
+      "read-only",
+      "-C",
+      projectRoot,
+      "-",
+    ],
+    input: prompt,
+  };
+}
+
+function runtimeUnderstandingPrompt(question) {
+  return `You are the interactive understanding agent for a long-running Loopit project. You are independent from the worker and read-only.
+
+Read .loopit/runtime/STATE.md, .loopit/runtime/LEDGER.md, pending .loopit/runtime/STEERING.md when present, and the relevant reports under .loopit/runtime/reports/. Inspect referenced project artifacts when useful. Answer the user's question from durable evidence, not assumptions.
+
+Lead with the current situation in plain language. Distinguish deliverables that exist from beliefs or interpretations. Explain what changed, what worked, what failed or remains uncertain, which assignment is active, and what the frontier says will happen next when relevant. Cite state item IDs, iteration IDs, report paths, and project files inline so the user can audit important claims. If the requested fact is not recorded, say so.
+
+Do not modify files, change state, or issue steering. A human steering instruction is recorded separately through the control panel.
+
+User question:
+${question}`;
 }
 
 function rehearsalPrompt() {
@@ -1145,6 +1435,47 @@ function parseConstructionResult(value) {
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/\s*```$/, "");
   return JSON.parse(source);
+}
+
+function validateRuntimeIntegration(value) {
+  const result = parseConstructionResult(value);
+  if (!result || typeof result !== "object") {
+    throw new Error("The runtime supervisor did not return structured state.");
+  }
+  if (!["continue", "pause", "complete"].includes(result.outcome)) {
+    throw new Error("The runtime supervisor returned an invalid outcome.");
+  }
+  if (!["advanced", "learned", "neutral", "regressed"].includes(result.progress)) {
+    throw new Error("The runtime supervisor returned an invalid progress value.");
+  }
+  for (const field of [
+    "message",
+    "completed",
+    "nextState",
+    "nextAction",
+    "reason",
+  ]) {
+    if (!String(result[field] ?? "").trim()) {
+      throw new Error(`The runtime supervisor omitted ${field}.`);
+    }
+  }
+  if (
+    !result.direction ||
+    !Array.isArray(result.items) ||
+    !Array.isArray(result.frontier) ||
+    !Array.isArray(result.decisions)
+  ) {
+    throw new Error("The runtime supervisor returned an incomplete state.");
+  }
+  if (
+    result.outcome === "continue" &&
+    !result.frontier.some((item) => item.status === "ready")
+  ) {
+    throw new Error(
+      "The runtime supervisor requested continuation without ready work.",
+    );
+  }
+  return result;
 }
 
 function rawLoopRevision(source) {
@@ -1602,6 +1933,132 @@ ${report.trim()}
   });
 }
 
+async function streamRuntimeUnderstanding(request, response) {
+  if (!runtimeAllowed) {
+    json(response, 409, {
+      error:
+        "Runtime is disabled for the Loopit control-plane repository. Start Loopit from a separate target project.",
+    });
+    return;
+  }
+  if (activeUnderstanding) {
+    json(response, 409, {
+      error: "The runtime understanding agent is already answering a question.",
+    });
+    return;
+  }
+  const loop = await readLoopOrNull();
+  const state = await readRuntimeStateOrNull();
+  if (!loop || !state) {
+    json(response, 400, {
+      error: "Initialize the runtime state before asking about it.",
+    });
+    return;
+  }
+  const body = await readBody(request);
+  const question =
+    String(body.question ?? "").trim() ||
+    "What is the current state, what changed recently, and what happens next?";
+  const agent = body.agent === "claude" ? "claude" : "codex";
+  const invocation = runtimeUnderstandingCommandFor(
+    agent,
+    runtimeUnderstandingPrompt(question),
+  );
+
+  response.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+  });
+  const send = (event) => {
+    if (!response.writableEnded && !response.destroyed) {
+      response.write(`data: ${JSON.stringify(event)}\n\n`);
+    }
+  };
+
+  const child = spawn(invocation.command, invocation.args, {
+    cwd: projectRoot,
+    env: process.env,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  activeUnderstanding = { child, agent };
+  child.stdin.end(invocation.input);
+  let stdoutBuffer = "";
+  let stderrBuffer = "";
+  let answer = "";
+  let providerError = "";
+  const claudeToolUses = new Map();
+
+  const handleEvent = (event) => {
+    if (agent === "codex") {
+      const progress = codexActivity(event, "understanding");
+      if (progress) send({ type: "activity", ...progress });
+      if (
+        event.type === "item.completed" &&
+        event.item?.type === "agent_message"
+      ) {
+        answer = event.item.text;
+        send({ type: "answer", text: answer });
+      }
+      if (event.type === "turn.failed" || event.type === "error") {
+        providerError = readableProviderError(event, agent);
+      }
+      return;
+    }
+    for (const progress of claudeActivities(
+      event,
+      "understanding",
+      claudeToolUses,
+    )) {
+      send({ type: "activity", ...progress });
+    }
+    if (event.type === "result") {
+      answer = event.result ?? answer;
+      if (answer) send({ type: "answer", text: answer });
+      if (event.is_error) providerError = readableProviderError(event, agent);
+    }
+  };
+
+  child.stdout.on("data", (chunk) => {
+    stdoutBuffer += chunk.toString();
+    const lines = stdoutBuffer.split("\n");
+    stdoutBuffer = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        handleEvent(JSON.parse(line));
+      } catch {
+        // Provider output is normalized before it reaches the UI.
+      }
+    }
+  });
+  child.stderr.on("data", (chunk) => {
+    stderrBuffer = `${stderrBuffer}${chunk.toString()}`.slice(-12_000);
+  });
+  child.on("error", (error) => {
+    providerError = `${invocation.command} could not be started: ${error.message}`;
+  });
+  child.on("close", (code, signal) => {
+    activeUnderstanding = null;
+    const interrupted = signal === "SIGTERM";
+    const failure =
+      providerError ||
+      (!interrupted && code && code !== 0
+        ? stderrBuffer.trim().split("\n").slice(-3).join("\n") ||
+          `${invocation.command} exited with code ${code}.`
+        : "");
+    if (failure) send({ type: "error", text: failure });
+    if (!failure && !interrupted && !answer) {
+      send({
+        type: "error",
+        text: "The understanding agent finished without an answer.",
+      });
+    }
+    send({ type: "done", interrupted });
+    if (!response.destroyed) response.end();
+  });
+}
+
 async function streamRuntime(request, response) {
   if (!runtimeAllowed) {
     json(response, 409, {
@@ -1632,6 +2089,23 @@ async function streamRuntime(request, response) {
 
   const body = await readBody(request);
   const agent = body.agent === "claude" ? "claude" : "codex";
+  const autonomyMode =
+    body.autonomyMode === "unattended" ? "unattended" : "guided";
+  const durationHours = Number(body.durationHours);
+  const maxIterations = Number(body.maxIterations);
+  const autonomy = {
+    mode: autonomyMode,
+    runUntil:
+      Number.isFinite(durationHours) && durationHours > 0
+        ? new Date(Date.now() + durationHours * 60 * 60 * 1_000).toISOString()
+        : null,
+    maxIterations:
+      Number.isInteger(maxIterations) && maxIterations > 0
+        ? maxIterations
+        : null,
+  };
+  let runtimeState = await ensureRuntimeState(loop, autonomy);
+  let ledger = await readRuntimeLedger();
   const run = {
     id: newRunId(),
     loopRevision: loop.revision,
@@ -1705,24 +2179,28 @@ async function streamRuntime(request, response) {
   };
   publishActivity({
     text: "Starting continuous runtime",
-    detail: `Iteration 1 · working in ${projectRoot}`,
+    detail: `${autonomyMode === "unattended" ? "Unattended" : "Guided"} autonomy · working in ${projectRoot}`,
     kind: "start",
   });
 
-  const runWorkerIteration = async (iterationNumber) => {
-    const invocation = runtimeCommandFor(
-      agent,
-      runtimePrompt(run.id, iterationNumber),
-    );
+  const runAgentPhase = async ({
+    invocation,
+    iterationNumber,
+    phase,
+    structured = false,
+  }) => {
     const startedAt = new Date().toISOString();
     run.currentIteration = iterationNumber;
     publishActivity({
-      text: `Starting loop iteration ${iterationNumber}`,
+      text:
+        phase === "worker"
+          ? `Starting loop iteration ${iterationNumber}`
+          : `Integrating loop iteration ${iterationNumber}`,
       detail:
-        iterationNumber === 1
-          ? "Beginning from the declared first work"
-          : "Continuing from the previous durable handoff",
-      kind: "iteration",
+        phase === "worker"
+          ? "Executing one bounded assignment"
+          : "Auditing evidence and updating durable state",
+      kind: phase === "worker" ? "iteration" : "integration",
     });
     await writeRun(run);
     send({ type: "run_updated", run: publicRun(true) });
@@ -1739,10 +2217,14 @@ async function streamRuntime(request, response) {
       let stdoutBuffer = "";
       let stderrBuffer = "";
       let finalSummary = "";
+      let structuredResult = null;
       let discoveredSessionId = null;
       let providerError = "";
       let lastActivityAt = Date.now();
-      let lastActivityText = `Starting loop iteration ${iterationNumber}`;
+      let lastActivityText =
+        phase === "worker"
+          ? `Starting loop iteration ${iterationNumber}`
+          : `Integrating loop iteration ${iterationNumber}`;
       const claudeToolUses = new Map();
 
       const publishWorkerActivity = (progress) => {
@@ -1785,7 +2267,8 @@ async function streamRuntime(request, response) {
             event.item?.type === "agent_message"
           ) {
             finalSummary = event.item.text;
-            send({ type: "agent_message", text: finalSummary });
+            if (structured) structuredResult = event.item.text;
+            else send({ type: "agent_message", text: finalSummary });
           }
           if (event.type === "turn.failed" || event.type === "error") {
             providerError = readableProviderError(event, agent);
@@ -1809,7 +2292,9 @@ async function streamRuntime(request, response) {
           publishWorkerActivity(progress);
         }
         if (event.type === "result") {
-          if (event.result) {
+          if (structured) {
+            structuredResult = event.structured_output ?? event.result ?? null;
+          } else if (event.result) {
             finalSummary = event.result;
             send({ type: "agent_message", text: finalSummary });
           }
@@ -1859,6 +2344,7 @@ async function streamRuntime(request, response) {
           startedAt,
           finishedAt: new Date().toISOString(),
           finalSummary,
+          structuredResult,
           discoveredSessionId,
           interrupted,
           failure,
@@ -1867,46 +2353,345 @@ async function streamRuntime(request, response) {
     });
   };
 
+  const stateEvent = async () => {
+    send({
+      type: "runtime_state",
+      snapshot: {
+        state: runtimeState,
+        ledger,
+        steering: await readRuntimeSteering(),
+        loopRevision: loop.revision,
+      },
+    });
+  };
+
   let interrupted = false;
+  let completedThisRun = 0;
   try {
     while (activeRun?.runId === run.id && !activeRun.stopRequested) {
+      runtimeState = (await readRuntimeStateOrNull()) ?? runtimeState;
       const iterationNumber = run.iterations.length + 1;
-      const result = await runWorkerIteration(iterationNumber);
-      run.sessionId = result.discoveredSessionId;
-      run.summary = result.finalSummary || result.failure || run.summary;
+      if (
+        runtimeState.autonomy.runUntil &&
+        Date.now() >= Date.parse(runtimeState.autonomy.runUntil)
+      ) {
+        run.status = "paused";
+        run.summary = "The configured unattended runtime duration was reached.";
+        break;
+      }
+      if (
+        runtimeState.autonomy.maxIterations &&
+        completedThisRun >= runtimeState.autonomy.maxIterations
+      ) {
+        run.status = "paused";
+        run.summary = "The configured iteration limit was reached.";
+        break;
+      }
 
-      if (result.interrupted || activeRun?.stopRequested) {
+      const globalIteration = ledger.length + 1;
+      const iterationId = `iteration-${String(globalIteration).padStart(4, "0")}`;
+      const selected = selectRuntimeAssignment(
+        runtimeState,
+        loop,
+        iterationId,
+        new Date().toISOString(),
+      );
+      runtimeState = selected.state;
+      let assignment = selected.assignment;
+      let syntheticReport = "";
+      if (!assignment) {
+        const pendingSteering = (await readRuntimeSteering()).filter(
+          (entry) => entry.status === "pending",
+        );
+        if (
+          runtimeState.status === "completed" ||
+          (runtimeState.autonomy.mode !== "unattended" &&
+            pendingSteering.length === 0)
+        ) {
+          run.status =
+            runtimeState.status === "completed" ? "completed" : "paused";
+          run.summary =
+            runtimeState.status === "completed"
+              ? "The runtime objective is complete."
+              : "No objective-backed work is ready. Review the frontier or steer the runtime.";
+          break;
+        }
+        const startedAt = new Date().toISOString();
+        assignment = {
+          id: iterationId,
+          frontierId: "frontier-reassessment",
+          title: "Reassess next work",
+          objective: runtimeState.direction.northStar,
+          status: "result-ready",
+          startedAt,
+          reportPath: `.loopit/runtime/reports/${iterationId}.md`,
+          rationale:
+            "The frontier has no ready work, so the supervisor must apply steering or compare the current state with the objective.",
+          instructions: [
+            "Review pending human steering.",
+            "Compare durable state with the north star and completion policy.",
+            "Create only evidence-backed next work, a legitimate wait, or completion.",
+          ],
+          deliverables: ["An updated durable state and justified frontier."],
+          evidence: [
+            "The current frontier contains no ready item.",
+            ...pendingSteering.map(
+              (entry) => `Human steering ${entry.id}: ${entry.directive}`,
+            ),
+          ],
+        };
+        syntheticReport = `# Iteration report
+
+## Summary
+
+No worker was launched because the frontier had no ready work. The runtime supervisor is reassessing the objective and applying pending human steering.
+
+## Assignment
+
+Reassess next work from durable state.
+
+## Work performed
+
+Control-plane integration only.
+
+## Deliverables
+
+No project deliverable changed.
+
+## Evidence
+
+- The current frontier contains no ready work.
+${pendingSteering.map((entry) => `- Human steering ${entry.id}: ${entry.directive}`).join("\n") || "- No human steering is pending; unattended autonomy requested objective-gap analysis."}
+
+## Outcome
+
+Status: completed
+
+## What appears to work
+
+Durable state remains available for reassessment.
+
+## Failures, limitations, and uncertainty
+
+The next bounded work has not yet been selected.
+
+## Candidate state updates
+
+Apply steering and replenish justified work, wait, or complete.
+
+## Suggested next work
+
+Determined by the runtime supervisor.
+
+## Provenance
+
+.loopit/runtime/STATE.md and .loopit/runtime/STEERING.md
+`;
+        runtimeState = normalizeRuntimeState({
+          ...runtimeState,
+          version: runtimeState.version + 1,
+          updatedAt: startedAt,
+          status: "integrating",
+          activeAssignment: assignment,
+        });
+      }
+
+      const durableWrites = [
+        writeRuntimeState(runtimeState),
+        writeText(
+          path.join(runtimeAssignmentsDir, `${assignment.id}.md`),
+          serializeRuntimeAssignment(assignment, runtimeState.version),
+        ),
+      ];
+      if (syntheticReport) {
+        durableWrites.push(
+          writeText(path.join(projectRoot, assignment.reportPath), syntheticReport),
+        );
+      }
+      await Promise.all(durableWrites);
+      await stateEvent();
+      publishActivity({
+        text:
+          assignment.status === "result-ready"
+            ? "Resuming result integration"
+            : "Assignment selected",
+        detail: assignment.title,
+        kind: "assignment",
+        status: "complete",
+      });
+
+      let report = "";
+      let workerStartedAt = assignment.startedAt;
+      if (assignment.status === "result-ready") {
+        report = await readFile(
+          path.join(projectRoot, assignment.reportPath),
+          "utf8",
+        );
+      } else {
+        const workerResult = await runAgentPhase({
+          invocation: runtimeCommandFor(
+            agent,
+            runtimeWorkerPrompt(run.id, assignment),
+          ),
+          iterationNumber,
+          phase: "worker",
+        });
+        run.sessionId = workerResult.discoveredSessionId;
+        workerStartedAt = workerResult.startedAt;
+        run.summary =
+          workerResult.finalSummary || workerResult.failure || run.summary;
+
+        if (workerResult.interrupted || activeRun?.stopRequested) {
+          interrupted = true;
+          run.status = "interrupted";
+          runtimeState = await writeRuntimeState({
+            ...runtimeState,
+            status: "interrupted",
+            updatedAt: new Date().toISOString(),
+            activeAssignment: runtimeState.activeAssignment
+              ? { ...runtimeState.activeAssignment, status: "interrupted" }
+              : null,
+          });
+          await stateEvent();
+          break;
+        }
+        if (workerResult.failure) {
+          run.status = "failed";
+          runtimeState = await writeRuntimeState({
+            ...runtimeState,
+            status: "paused",
+            updatedAt: new Date().toISOString(),
+            activeAssignment: runtimeState.activeAssignment
+              ? { ...runtimeState.activeAssignment, status: "interrupted" }
+              : null,
+          });
+          break;
+        }
+        report = workerResult.finalSummary.trim();
+        if (!report) {
+          run.status = "failed";
+          run.summary =
+            "The worker ended without an auditable iteration report.";
+          send({ type: "error", text: run.summary });
+          break;
+        }
+        await writeText(path.join(projectRoot, assignment.reportPath), `${report}\n`);
+        runtimeState = await writeRuntimeState({
+          ...runtimeState,
+          status: "integrating",
+          updatedAt: new Date().toISOString(),
+          activeAssignment: runtimeState.activeAssignment
+            ? { ...runtimeState.activeAssignment, status: "result-ready" }
+            : null,
+        });
+        await stateEvent();
+        publishActivity({
+          text: "Worker report saved",
+          detail: assignment.reportPath,
+          kind: "report",
+          status: "complete",
+        });
+      }
+
+      const pendingSteering = (await readRuntimeSteering()).filter(
+        (entry) => entry.status === "pending",
+      );
+      const integrationResult = await runAgentPhase({
+        invocation: runtimeIntegrationCommandFor(
+          agent,
+          runtimeIntegrationPrompt(
+            run.id,
+            assignment,
+            pendingSteering,
+            runtimeState.autonomy.mode,
+          ),
+        ),
+        iterationNumber,
+        phase: "integration",
+        structured: true,
+      });
+      if (integrationResult.interrupted || activeRun?.stopRequested) {
         interrupted = true;
         run.status = "interrupted";
         break;
       }
-      if (result.failure) {
+      if (integrationResult.failure) {
         run.status = "failed";
-        break;
-      }
-      if (!result.finalSummary.trim()) {
-        run.status = "failed";
-        run.summary =
-          "The worker ended without a durable iteration handoff, so Loopit stopped instead of launching an unobservable cycle.";
-        send({ type: "error", text: run.summary });
+        run.summary = integrationResult.failure;
         break;
       }
 
-      const handoff = parseRuntimeHandoff(result.finalSummary);
+      const integration = validateRuntimeIntegration(
+        integrationResult.structuredResult,
+      );
+      const previousVersion = runtimeState.version;
+      const integratedAt = new Date().toISOString();
+      runtimeState = integrationState(runtimeState, integration, integratedAt);
+      await writeRuntimeState(runtimeState);
+      const ledgerEntry = {
+        number: globalIteration,
+        title: assignment.title,
+        id: iterationId,
+        runId: run.id,
+        loopRevision: loop.revision,
+        assignmentId: assignment.id,
+        outcome: integration.outcome,
+        progress: integration.progress,
+        startedAt: workerStartedAt,
+        finishedAt: integratedAt,
+        fromVersion: previousVersion,
+        toVersion: runtimeState.version,
+        reportPath: assignment.reportPath,
+        completed: integration.completed,
+        next: integration.nextAction,
+        reason: integration.reason,
+        stateChanges: integration.stateChanges,
+        frontierChanges: integration.frontierChanges,
+        relaxations: integration.relaxations,
+      };
+      ledger = [...ledger, ledgerEntry];
+      await writeRuntimeLedger(ledger);
+      if (pendingSteering.length) {
+        const appliedIds = new Set(pendingSteering.map((entry) => entry.id));
+        const steering = (await readRuntimeSteering()).map((entry) =>
+          appliedIds.has(entry.id)
+            ? {
+                ...entry,
+                status: "applied",
+                appliedStateVersion: runtimeState.version,
+              }
+            : entry,
+        );
+        await writeRuntimeSteering(steering);
+      }
+
+      const handoff = {
+        outcome: integration.outcome,
+        state: integration.nextState,
+        completed: integration.completed,
+        next: integration.nextAction,
+        reason: integration.reason,
+      };
+      run.summary = integration.message;
       run.iterations.push({
         number: iterationNumber,
         ...handoff,
-        startedAt: result.startedAt,
-        finishedAt: result.finishedAt,
+        startedAt: workerStartedAt,
+        finishedAt: integrationResult.finishedAt,
+        reportPath: assignment.reportPath,
+        stateVersion: runtimeState.version,
+        progress: integration.progress,
       });
+      completedThisRun += 1;
       publishActivity({
         text: `Loop iteration ${iterationNumber} completed`,
-        detail: handoff.completed,
+        detail: `${handoff.completed} · state v${runtimeState.version}`,
         kind: "iteration",
         status: "complete",
       });
       await writeRun(run);
       send({ type: "iteration_completed", iteration: run.iterations.at(-1) });
+      await stateEvent();
 
       if (handoff.outcome === "continue") {
         run.currentIteration = iterationNumber + 1;
@@ -1971,6 +2756,7 @@ const server = http.createServer(async (request, response) => {
           : "Choose a target repository that does not contain or sit inside the Loopit control-plane repository.",
         active: Boolean(activeRun),
         activePurpose: activeRun?.purpose ?? null,
+        understandingActive: Boolean(activeUnderstanding),
         agents: { codex, claude },
       });
       return;
@@ -2075,6 +2861,129 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/api/runtime") {
+      if (!runtimeAllowed) {
+        json(response, 200, {
+          state: null,
+          ledger: [],
+          steering: [],
+          loopRevision: null,
+        });
+        return;
+      }
+      const loop = await readLoopOrNull();
+      if (!loop) {
+        json(response, 200, {
+          state: null,
+          ledger: [],
+          steering: [],
+          loopRevision: null,
+        });
+        return;
+      }
+      await ensureRuntimeState(loop);
+      json(response, 200, await runtimeSnapshot(loop));
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/runtime/autonomy"
+    ) {
+      if (!runtimeAllowed) {
+        json(response, 409, {
+          error:
+            "Runtime policy can only be set for a separate target project.",
+        });
+        return;
+      }
+      const loop = await readLoopOrNull();
+      if (!loop) {
+        json(response, 400, { error: "Construct a loop before setting runtime policy." });
+        return;
+      }
+      const body = await readBody(request);
+      const mode = body.mode === "unattended" ? "unattended" : "guided";
+      const durationHours = Number(body.durationHours);
+      const maxIterations = Number(body.maxIterations);
+      const state = await ensureRuntimeState(loop);
+      await writeRuntimeState({
+        ...state,
+        version: state.version + 1,
+        updatedAt: new Date().toISOString(),
+        autonomy: {
+          mode,
+          runUntil:
+            mode === "unattended" &&
+            Number.isFinite(durationHours) &&
+            durationHours > 0
+              ? new Date(
+                  Date.now() + durationHours * 60 * 60 * 1_000,
+                ).toISOString()
+              : null,
+          maxIterations:
+            Number.isInteger(maxIterations) && maxIterations > 0
+              ? maxIterations
+              : null,
+        },
+      });
+      json(response, 200, await runtimeSnapshot(loop));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/runtime/steer") {
+      if (!runtimeAllowed) {
+        json(response, 409, {
+          error: "Runtime steering can only target a separate project.",
+        });
+        return;
+      }
+      const body = await readBody(request);
+      const directive = String(body.directive ?? "").trim();
+      if (!directive) {
+        json(response, 400, { error: "A steering direction is required." });
+        return;
+      }
+      const loop = await readLoopOrNull();
+      if (!loop) {
+        json(response, 400, { error: "Construct a loop before steering runtime." });
+        return;
+      }
+      await ensureRuntimeState(loop);
+      const directives = await readRuntimeSteering();
+      directives.push({
+        id: `steer-${Date.now()}-${randomUUID().slice(0, 6)}`,
+        createdAt: new Date().toISOString(),
+        status: "pending",
+        appliedStateVersion: null,
+        directive,
+      });
+      await writeRuntimeSteering(directives);
+      json(response, 200, await runtimeSnapshot(loop));
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/runtime/understand"
+    ) {
+      await streamRuntimeUnderstanding(request, response);
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/runtime/understand/interrupt"
+    ) {
+      if (!activeUnderstanding) {
+        json(response, 200, { interrupted: false });
+        return;
+      }
+      activeUnderstanding.child.kill("SIGTERM");
+      json(response, 200, { interrupted: true });
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/api/loop") {
       if (activeRun) {
         json(response, 409, {
@@ -2143,6 +3052,7 @@ server.listen(port, "127.0.0.1", () => {
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
     activeRun?.child.kill("SIGTERM");
+    activeUnderstanding?.child.kill("SIGTERM");
     server.close(() => process.exit(0));
   });
 }

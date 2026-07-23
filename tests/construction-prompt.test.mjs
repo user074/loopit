@@ -106,8 +106,9 @@ test("construction uses a machine-constrained loop handoff", () => {
   assert.match(daemon, /Return only the structured response required by the supplied output schema/);
   assert.match(daemon, /Loopit validates that response and serializes the loop into canonical Markdown/);
   assert.match(daemon, /"--json-schema"/);
-  assert.equal(daemon.match(/"--output-schema"/g)?.length, 1);
+  assert.equal(daemon.match(/"--output-schema"/g)?.length, 2);
   assert.match(daemon, /constructionSchemaPath/);
+  assert.match(daemon, /runtimeIntegrationSchemaPath/);
   assert.match(daemon, /applyConstructionResult/);
   assert.match(daemon, /"--sandbox",\s*"read-only"/);
 });
@@ -139,15 +140,19 @@ test("construction testing has a reachable passed outcome", () => {
 
 test("runtime is gated by the current passed revision and uses a separate worker", () => {
   assert.match(daemon, /Pass Test this loop for revision/);
-  assert.match(daemon, /You are the worker for Loopit run/);
-  assert.match(daemon, /do not redesign it and do not edit \.loopit\/loop\.md/);
-  assert.match(daemon, /Begin at the declared start state/);
-  assert.match(daemon, /Do not restart completed work/);
-  assert.match(daemon, /Complete exactly one useful ordinary recurrence/);
-  assert.match(daemon, /Outcome: CONTINUE, PAUSE, or COMPLETE/);
-  assert.match(daemon, /parseRuntimeHandoff/);
+  assert.match(daemon, /You are a bounded worker for Loopit run/);
+  assert.match(daemon, /Loopit—not this worker—owns integration/);
+  assert.match(daemon, /Do not edit any file under \.loopit\//);
+  assert.match(daemon, /Execute only that assignment/);
+  assert.match(daemon, /# Iteration report/);
+  assert.match(daemon, /You are the Loopit runtime supervisor integrating one bounded worker result/);
+  assert.match(daemon, /Return the full next direction, full state item list, full frontier/);
+  assert.match(daemon, /validateRuntimeIntegration/);
+  assert.match(daemon, /integrationState/);
   assert.match(daemon, /Loop iteration \$\{iterationNumber\} completed/);
   assert.match(daemon, /handoff\.outcome === "continue"/);
+  assert.match(daemon, /runtime\/STATE\.md/);
+  assert.match(daemon, /runtime\/LEDGER\.md/);
   assert.match(daemon, /url\.pathname === "\/api\/run"/);
   assert.match(daemon, /mkdir\(runsDir/);
   assert.match(daemon, /activeRun\?\.purpose === "runtime"/);
@@ -165,8 +170,8 @@ test("runtime is gated by the current passed revision and uses a separate worker
 test("Codex accepts explicitly selected projects before Git initialization", () => {
   assert.equal(
     daemon.match(/"--skip-git-repo-check"/g)?.length,
-    3,
-    "construction, rehearsal, and runtime must all accept a new project directory",
+    5,
+    "construction, rehearsal, worker, supervisor, and understanding turns must accept a new project directory",
   );
   assert.match(daemon, /"--sandbox",\s*"workspace-write"/);
   assert.match(daemon, /"--sandbox",\s*"read-only"/);

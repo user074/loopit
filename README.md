@@ -36,18 +36,20 @@ loopit
 
 Keep that terminal open, then open [http://localhost:3000](http://localhost:3000). Confirm that the header names the intended **Target project** before constructing or running anything. Loopit inherits the user's existing Codex model and reasoning configuration; this project was developed with GPT-5.6 Sol at Extra High (`xhigh`). If Codex is not authenticated yet, run `codex login` once before starting Loopit. No separate Loopit account, OpenAI API key, or hosted service is required.
 
-## Try the construction MVP
+## Try the current MVP
 
-This version completes the construction gate and includes a minimal continuous runtime: a user can construct and test a loop, then launch successive local workers until the loop reaches a real runtime boundary.
+This version completes the construction gate and the first runtime control-plane milestone: a user can construct and test a loop, then run a durable supervisor → bounded worker → evidence integration cycle until the loop reaches a real runtime boundary.
 
 The screen has two connected parts:
 
 - **Construction chat** launches the Codex or Claude Code CLI already installed and authenticated on the local machine. In a repository with meaningful content, the agent first inspects the project, explains what it believes the repository is doing, proposes a recognizable workflow, and asks the user to confirm or correct that understanding before creating `loop.md`. In an empty repository it asks one focused question about what the user wants to progress. The agent returns a transient schema-constrained loop object; Loopit validates its required IDs and enum values and is the only component that writes canonical `.loopit/loop.md`. This prevents Claude or Codex from making the panel disappear with an invalid Kind, Role, transition, or missing field. A live activity feed shows which project files and tools the agent is reading while it works. Conversations survive reloads as local Markdown files in `.loopit/conversations/`. Every Codex and Claude construction turn starts fresh and receives the saved Markdown conversation plus the current `loop.md`, so **New** starts empty and **History** restores the same durable context without depending on either provider's private session.
 - **Visual loop editor** shows three things in order: the specific starting work the user cares about, the recurring domain loop and its handoffs, then a separate concrete setup. For research, starting work means named hypotheses and their evidence status; for software it means features and implementation status; for design or business it means the actual questions, decisions, opportunities, cases, or deliverables being tracked. Compact tables keep those items scannable, the first task is visually emphasized, and long explanations and setup specifications stay collapsed until requested. Semantic zoom moves from familiar names, to purposes and handoffs, to full contents and rules. The user can edit each part directly; every visual save rewrites `.loopit/loop.md`, which the agent reads on its next turn.
 - **One-click loop testing** shows one visible route—trace every path, test with a fresh agent, fix or ask the user, then Passed. Deterministic trace failures go straight to repair using the exact validator findings instead of wasting a fresh-agent rehearsal first. After each repair, Loopit automatically tests the new revision again; one click can make up to three repair-and-retest rounds. It stops early only on Passed, a genuinely human-owned decision, a repair that made no durable change, a repeated design, or the safety limit. Parser, schema, ID, enum, and validator problems are always agent-owned; only explicit intent, authority, private facts, cost, or risk decisions can open human review. That review includes the state or artifact context, consequence, recommendation, and concrete choices. Passed means the current loop revision is structurally resumable, has no unresolved construction decision, and specifies later sandbox tests and failure routes; it does not claim that unimplemented production behavior already works. The full Markdown report remains available in `.loopit/test-report.md`.
-- **Gated continuous runtime** appears after structural checks and the separate test section. Start remains locked until the current loop revision passes. Once unlocked, Loopit launches a separate Codex or Claude worker for one ordinary loop recurrence. The worker integrates its result into durable project state and ends with a readable Markdown handoff naming the completed feature or other domain work, next state, next work, and whether to continue, pause, or complete. Loopit automatically launches the next fresh worker when the handoff says Continue. The UI shows every completed iteration and its next work alongside a live feed of commands, reads, edits, connected tools, and planning events. The Continuous runtime clock spans all automatically scheduled iterations and freezes only on a declared pause, failure, interruption, or accepted completion.
+- **Separate Runtime workspace** appears beside Design after the current loop revision passes. The runtime supervisor leases one objective-backed frontier item into an immutable Markdown assignment, launches a fresh workspace-write Codex or Claude worker, captures a detailed result report, then launches a fresh read-only supervisor turn to audit the evidence. Only the supervisor updates central state, beliefs, next work, decisions, and the append-only ledger. A worker finishing its response never decides continuation by itself.
+- **Runtime control and observability** are organized into Now, State, Next work, and History views. The UI shows the current objective and assignment, live reads/edits/commands/tests, what exists, what the runtime believes from evidence, known failures and uncertainty, ranked frontier work, waiting human decisions, and every report-backed state transition. Guided and time-bounded Unattended modes control how aggressively the supervisor can generate objectives and relax explicitly flexible requirements.
+- **Interactive understanding and steering** live in the left Runtime panel. A separate read-only agent answers questions such as “what changed overnight?” from state, ledger, reports, and project artifacts with auditable references. Steering is not hidden chat context: it is saved to `.loopit/runtime/STEERING.md`, shown as pending, and applied by the supervisor at the next safe state integration. If the frontier is empty, steering or unattended mode triggers an objective-gap reassessment instead of silently stopping.
 
-The current runtime is intentionally minimal. Durable artifacts and the iteration handoff carry context between fresh workers, which demonstrates that the loop can continue without depending on one long agent session. The next runtime layer must validate each claimed state transition and result package, resume a paused parent run, render human decisions as focused controls, enforce time/cost/tool limits, detect lack of progress, and add higher-level progress and health summaries.
+The target repository owns readable `.loopit/runtime/STATE.md`, immutable assignments, detailed iteration reports, append-only `LEDGER.md`, and `STEERING.md`. A saved result awaiting integration can be integrated after restart; an interrupted assignment remains leased for recovery instead of being forgotten or duplicated. The full design, current contracts, and intentionally deferred work are documented in [Runtime Control Plane](docs/RUNTIME_CONTROL_PLANE.md).
 
 ## The conversation is how Codex and GPT-5.6 Sol were used
 
@@ -63,8 +65,10 @@ The same Codex/GPT-5.6 Sol collaboration is part of the product:
 
 - **Construction supervisor:** a read-only Codex session turns the user's objective and repository context into domain-specific starting work, setup, states, handoffs, boundaries, and completion policy. Its transient output is schema-constrained; Loopit alone writes canonical `.loopit/loop.md`.
 - **Independent tester and repairer:** a fresh ephemeral Codex session challenges recurrence, handoffs, edge cases, interruption, and completion. Agent-owned findings are repaired and retested automatically; only genuine questions of human intent, authority, private information, cost, or risk return to the user.
-- **Continuous workers:** each workspace-write Codex worker completes one ordinary loop recurrence, modifies target-project artifacts, runs relevant commands and tests, integrates evidence, and emits a Markdown handoff. Loopit—not the model response—owns continuation and launches the next fresh worker.
-- **Control outside the model:** Loopit owns durable Markdown state, schema validation, revisions, deterministic traces, conversation records, runtime timing, iteration history, repository boundaries, and the Stop control. GPT-5.6 Sol supplies the reasoning and tool use; Loopit supplies the control plane.
+- **Continuous workers:** each workspace-write Codex worker receives one immutable bounded assignment, modifies only target-project artifacts, runs relevant commands and tests, and returns a detailed Markdown report. It cannot rewrite Loopit state or decide that the overall mission is complete.
+- **Runtime supervisor:** after every worker result, a fresh read-only schema-constrained Codex turn audits the report and project evidence, updates the full artifact-and-belief state, retires or replenishes objective-backed frontier work, records human decisions, and chooses continue, pause, or complete under the declared policy.
+- **Understanding and steering:** an independent read-only Codex turn explains current or historical state from durable evidence. Human steering is recorded durably and becomes an explicit input to the next supervisor integration.
+- **Control outside the model:** Loopit owns durable Markdown state, immutable assignments, reports, the ledger, steering records, schema validation, revisions, deterministic traces, runtime timing, repository boundaries, recovery checkpoints, and the Stop control. GPT-5.6 Sol supplies reasoning and tool use; Loopit supplies the control plane.
 
 The Codex integration uses the locally installed and authenticated CLI, so Loopit does not require a separate OpenAI API key or direct API integration; usage follows the user's existing Codex account and CLI configuration.
 
@@ -319,17 +323,11 @@ The primary view should emphasize meaningful state rather than raw agent activit
 
 Detailed logs should remain available for debugging and auditing, but they are not the normal supervision interface.
 
-### High-level synthesis
+### Interactive understanding
 
-Long-running work produces too many plans, reports, logs, and artifacts for a person to read continuously. Loopit should maintain a living synthesis that explains:
+Long-running work produces too many plans, reports, logs, and artifacts for a person to read continuously. Loopit should use an interactive understanding agent to answer questions from durable state, the ledger, reports, artifacts, and live events. It can explain what changed, what works, what failed, what remains uncertain, what is happening now, and where intervention matters.
 
-- The current understanding of the work.
-- The most important findings and changes.
-- What succeeded, failed, or remains uncertain.
-- The current direction and why it was selected.
-- Decisions or risks that deserve human attention.
-
-This synthesis should be generated from the durable state and run evidence, not from an unstructured chat transcript.
+For deeper inspection, the agent may generate a versioned interactive HTML view with timelines, comparisons, filters, and evidence links. Conversation and HTML are derived views rather than canonical state; each claim should remain traceable to a state item, report, or native artifact.
 
 ### Steering
 
@@ -395,8 +393,8 @@ For software engineering, the native deliverable may be a commit, pull request, 
 - A drag-and-drop workflow builder.
 - A collection of animated agent personas.
 - An activity dashboard centered on tool calls and token usage.
-- Endless autonomous work without an objective or sufficiency condition.
-- Allowing the agent to invent product direction when the authorized frontier is empty.
+- Endless autonomous work without a north star, evidence-backed gap, or runtime budget.
+- Allowing the agent to redefine the north star or invent unrelated work; unattended mode may generate bounded objectives only when they trace to authorized direction and observed evidence.
 - Treating the chat transcript as the durable record of the work.
 
 ## North-star measures

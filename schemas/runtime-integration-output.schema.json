@@ -1,0 +1,165 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Loopit runtime integration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "message",
+    "outcome",
+    "progress",
+    "completed",
+    "nextState",
+    "nextAction",
+    "reason",
+    "direction",
+    "items",
+    "frontier",
+    "decisions",
+    "stateChanges",
+    "frontierChanges",
+    "relaxations"
+  ],
+  "properties": {
+    "message": { "type": "string", "minLength": 1 },
+    "outcome": {
+      "type": "string",
+      "enum": ["continue", "pause", "complete"]
+    },
+    "progress": {
+      "type": "string",
+      "enum": ["advanced", "learned", "neutral", "regressed"]
+    },
+    "completed": { "type": "string", "minLength": 1 },
+    "nextState": { "type": "string", "minLength": 1 },
+    "nextAction": { "type": "string", "minLength": 1 },
+    "reason": { "type": "string", "minLength": 1 },
+    "direction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "northStar",
+        "currentDirection",
+        "currentObjective",
+        "better",
+        "hardRequirements",
+        "flexibleRequirements"
+      ],
+      "properties": {
+        "northStar": { "type": "string", "minLength": 1 },
+        "currentDirection": { "type": "string", "minLength": 1 },
+        "currentObjective": { "type": "string", "minLength": 1 },
+        "better": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "hardRequirements": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "flexibleRequirements": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "kind", "name", "status", "summary", "evidence"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["artifact", "belief", "failure", "uncertainty"]
+          },
+          "name": { "type": "string", "minLength": 1 },
+          "status": { "type": "string", "minLength": 1 },
+          "summary": { "type": "string", "minLength": 1 },
+          "evidence": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "frontier": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "title",
+          "status",
+          "priority",
+          "objectiveLink",
+          "causedBy",
+          "retirementEvidence"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "title": { "type": "string", "minLength": 1 },
+          "status": {
+            "type": "string",
+            "enum": ["ready", "waiting", "retired"]
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "objectiveLink": { "type": "string", "minLength": 1 },
+          "causedBy": { "type": "string", "minLength": 1 },
+          "retirementEvidence": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "question",
+          "status",
+          "context",
+          "recommendation"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "question": { "type": "string", "minLength": 1 },
+          "status": {
+            "type": "string",
+            "enum": ["waiting", "resolved", "deferred"]
+          },
+          "context": { "type": "string", "minLength": 1 },
+          "recommendation": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "stateChanges": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "frontierChanges": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "relaxations": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}
