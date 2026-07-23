@@ -58,11 +58,12 @@ test("server-renders the Loopit construction studio", async () => {
 });
 
 test("the product no longer depends on the disposable starter", async () => {
-  const [page, layout, packageJson, studio] = await Promise.all([
+  const [page, layout, packageJson, studio, styles] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
     readFile(new URL("../app/components/LoopStudio.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
 
   assert.match(page, /LoopStudio/);
@@ -119,6 +120,40 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.match(studio, /Current mission/);
   assert.match(studio, /Live here/);
   assert.match(studio, /runtime-region-worker-badge/);
+  assert.match(studio, /runtimeWorkVisual/);
+  assert.match(studio, /runtime-work-scene/);
+  assert.match(studio, /runtime-region-live-action/);
+  assert.match(studio, /Planning the next move/);
+  assert.match(studio, /Reading project files/);
+  assert.match(studio, /Editing project files/);
+  assert.match(studio, /Running tests/);
+  assert.match(studio, /Reviewing and integrating the result/);
+  assert.match(
+    styles,
+    /\.runtime-observer-scroll\s*\{[\s\S]*overflow-x:\s*hidden/,
+  );
+  assert.match(
+    styles,
+    /\.runtime-observer-panel \.activity-output pre\s*\{[\s\S]*width:\s*100%/,
+  );
+  assert.match(styles, /overflow-wrap:\s*anywhere/);
+  assert.match(styles, /\.runtime-observer-scroll-wrap/);
+  assert.match(styles, /scrollbar-gutter:\s*stable/);
+  assert.match(styles, /-webkit-line-clamp:\s*unset/);
+  assert.match(studio, /activity-entry-title/);
+  assert.match(studio, /activity-entry-detail/);
+  assert.match(
+    styles,
+    /grid-template-columns:\s*minmax\(0,\s*1fr\)\s*clamp\(360px,\s*34vw,\s*480px\)/,
+  );
+  assert.match(
+    styles,
+    /\.runtime-observer-panel \.activity-entry-title[\s\S]*overflow-wrap:\s*anywhere/,
+  );
+  assert.match(
+    styles,
+    /\.runtime-observer-panel \.activity-entry header\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*auto/,
+  );
   assert.match(studio, /runtime-semantic-zoom/);
   assert.match(studio, /Past result, current work, and next item/);
   assert.match(studio, /runtime-area-dock/);
@@ -129,7 +164,17 @@ test("the product no longer depends on the disposable starter", async () => {
   assert.match(studio, /Worker loop position/);
   assert.match(studio, /Ask about this/);
   assert.match(studio, /Issue direction/);
-  assert.match(studio, /runtime-map-command-console/);
+  assert.match(studio, /runtime-observer-panel/);
+  assert.match(studio, /Live worker and controls/);
+  assert.match(studio, /What the worker is doing/);
+  assert.match(studio, /Ask and intervene/);
+  assert.match(studio, /Is the worker stuck or blocked/);
+  assert.match(studio, /Stop now/);
+  assert.match(studio, /followLive/);
+  assert.match(studio, /distanceFromBottom/);
+  assert.match(studio, /Jump to live/);
+  assert.match(studio, /Understanding agent activity/);
+  assert.match(studio, /event\.type === "activity"/);
   assert.match(studio, /Queue direction/);
   assert.match(studio, /buildRuntimeMap/);
   assert.match(studio, /What exists/);

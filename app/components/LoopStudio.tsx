@@ -262,6 +262,7 @@ interface RuntimeUnderstandingMessage {
   id: string;
   role: "user" | "agent" | "steering" | "error";
   text: string;
+  at: string;
 }
 
 interface WiringTestStep {
@@ -534,7 +535,10 @@ function activityEntry(event: Record<string, unknown>): ActivityEntry {
     id:
       String(event.id || "") ||
       `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    at: typeof event.at === "string" ? event.at : null,
+    at:
+      typeof event.at === "string"
+        ? event.at
+        : new Date().toISOString(),
     text: String(event.text || "Agent is working"),
     detail: typeof event.detail === "string" ? event.detail : null,
     output: typeof event.output === "string" ? event.output : null,
@@ -598,7 +602,7 @@ function ActivityFeed({
           </span>
           <div>
             <header>
-              <strong>{entry.text}</strong>
+              <strong className="activity-entry-title">{entry.text}</strong>
               {showTime && entry.at && (
                 <time dateTime={entry.at}>
                   {new Intl.DateTimeFormat(undefined, {
@@ -609,7 +613,11 @@ function ActivityFeed({
                 </time>
               )}
             </header>
-            {entry.detail && <small title={entry.detail}>{entry.detail}</small>}
+            {entry.detail && (
+              <small className="activity-entry-detail" title={entry.detail}>
+                {entry.detail}
+              </small>
+            )}
             {entry.output && (
               <details className="activity-output">
                 <summary>View details</summary>
@@ -1657,6 +1665,130 @@ const RUNTIME_MAP_ZOOM_DESCRIPTION: Record<FlowZoom, string> = {
   2: "Tracked units, evidence, and unresolved signals",
 };
 
+type RuntimeWorkVisualKind =
+  | "connecting"
+  | "planning"
+  | "reading"
+  | "writing"
+  | "running"
+  | "searching"
+  | "reporting"
+  | "integrating"
+  | "working"
+  | "idle";
+
+interface RuntimeWorkVisual {
+  kind: RuntimeWorkVisualKind;
+  icon: string;
+  label: string;
+  target: string;
+}
+
+function runtimeWorkVisual(
+  activity: ActivityEntry | null,
+  presence: RuntimePresence | null,
+  isRunning: boolean,
+): RuntimeWorkVisual {
+  if (!isRunning && !presence) {
+    return {
+      kind: "idle",
+      icon: "○",
+      label: "Waiting to start",
+      target: "Start the loop to deploy the next bounded assignment",
+    };
+  }
+
+  const target =
+    activity?.detail ??
+    presence?.detail ??
+    presence?.currentAction ??
+    "Preparing the next action";
+  const kind =
+    activity?.kind ??
+    (presence?.actor === "supervisor" ? "integration" : "start");
+
+  if (["reasoning", "plan"].includes(kind)) {
+    return {
+      kind: "planning",
+      icon: "◇",
+      label: "Planning the next move",
+      target,
+    };
+  }
+  if (kind === "read") {
+    return {
+      kind: "reading",
+      icon: "▤",
+      label: "Reading project files",
+      target,
+    };
+  }
+  if (kind === "write") {
+    return {
+      kind: "writing",
+      icon: "✎",
+      label: "Editing project files",
+      target,
+    };
+  }
+  if (kind === "command") {
+    const testing = /(?:^|\s)(?:test|pytest|vitest|jest|cargo test|go test)|testing/i.test(
+      `${activity?.text ?? ""} ${target}`,
+    );
+    return {
+      kind: "running",
+      icon: "›_",
+      label: testing ? "Running tests" : "Running a project command",
+      target,
+    };
+  }
+  if (["search", "tool"].includes(kind)) {
+    return {
+      kind: "searching",
+      icon: "⌕",
+      label:
+        kind === "search"
+          ? "Searching for evidence"
+          : "Using a connected tool",
+      target,
+    };
+  }
+  if (kind === "message") {
+    return {
+      kind: "reporting",
+      icon: "≡",
+      label: "Reporting progress",
+      target,
+    };
+  }
+  if (
+    ["integration", "update", "challenge"].includes(kind) ||
+    presence?.actor === "supervisor"
+  ) {
+    return {
+      kind: "integrating",
+      icon: "↻",
+      label: "Reviewing and integrating the result",
+      target,
+    };
+  }
+  if (["start", "session", "iteration"].includes(kind)) {
+    return {
+      kind: "connecting",
+      icon: "•••",
+      label:
+        kind === "iteration" ? "Starting the next iteration" : "Connecting the worker",
+      target,
+    };
+  }
+  return {
+    kind: "working",
+    icon: "◉",
+    label: activity?.text ?? presence?.currentAction ?? "Working",
+    target,
+  };
+}
+
 function RuntimeOperationsMap({
   regions,
   selectedRegion,
@@ -1722,6 +1854,7 @@ function RuntimeOperationsMap({
   );
   const topRegions = regions.slice(0, 3);
   const bottomRegions = regions.slice(3, 6);
+  const workVisual = runtimeWorkVisual(latestActivity, presence, isRunning);
 
   const renderRegion = (region: RuntimeMapRegion, index: number) => {
     const hasUnit = activeRegion?.id === region.id;
@@ -1782,6 +1915,18 @@ function RuntimeOperationsMap({
               ? `Worker ${presence.iterationNumber}`
               : "Supervisor"}
           </span>
+        )}
+        {hasUnit && presence && (
+          <div
+            className={`runtime-region-live-action is-${workVisual.kind}`}
+            title={workVisual.target}
+          >
+            <span>{workVisual.icon}</span>
+            <div>
+              <strong>{workVisual.label}</strong>
+              <small>{workVisual.target}</small>
+            </div>
+          </div>
         )}
         {zoom === 0 ? (
           <div className={`runtime-region-status is-${region.condition}`}>
@@ -1909,26 +2054,40 @@ function RuntimeOperationsMap({
             >
               <span>{presence ? "◉ Current mission" : "Next mission"}</span>
               <h3>{presence?.assignmentTitle ?? currentObjective}</h3>
-              <div className="runtime-mission-worker">
-                <i>{presence?.actor === "supervisor" ? "S" : "W"}</i>
-                <div>
-                  <strong>
+              <div
+                aria-label={`${workVisual.label}: ${workVisual.target}`}
+                className={`runtime-work-scene is-${workVisual.kind}`}
+              >
+                <div className="runtime-work-scene-unit">
+                  <i>{presence?.actor === "supervisor" ? "S" : "W"}</i>
+                  <span>
                     {presence
                       ? presence.actor === "worker"
                         ? `Worker ${presence.iterationNumber}`
                         : "Supervisor"
-                      : "No worker deployed"}
-                  </strong>
-                  <small>
-                    {presence?.currentAction ??
-                      "Start the loop to deploy the next bounded assignment"}
-                  </small>
+                      : "Worker"}
+                  </span>
                 </div>
-                <em>
+                <div aria-hidden="true" className="runtime-work-scene-motion">
+                  <i />
+                  <i />
+                  <i />
+                </div>
+                <div className="runtime-work-scene-target">
+                  <span aria-hidden="true">{workVisual.icon}</span>
+                  <div>
+                    <strong>{workVisual.label}</strong>
+                    <small title={workVisual.target}>{workVisual.target}</small>
+                  </div>
+                </div>
+              </div>
+              <div className="runtime-mission-location">
+                <span>
                   {presence
                     ? `${activeRegion?.label ?? "Project"} · ${presence.phaseName}`
-                    : "Ready"}
-                </em>
+                    : "Ready for work"}
+                </span>
+                <small>{latestActivity?.text ?? presence?.currentAction ?? "Idle"}</small>
               </div>
               <ol aria-label="Worker loop position">
                 {phases.map((phase, phaseIndex) => (
@@ -2092,6 +2251,350 @@ function RuntimeOperationsMap({
   );
 }
 
+function RuntimeObserverPanel({
+  agent,
+  activities,
+  activity,
+  activityNote,
+  composerMode,
+  input,
+  isRunning,
+  isUnderstanding,
+  messages,
+  now,
+  onInput,
+  onMode,
+  onStop,
+  onSubmit,
+  pendingSteering,
+  presence,
+  runStatus,
+  understandingActivities,
+}: {
+  agent: AgentName;
+  activities: ActivityEntry[];
+  activity: string;
+  activityNote: string | null;
+  composerMode: "ask" | "steer";
+  input: string;
+  isRunning: boolean;
+  isUnderstanding: boolean;
+  messages: RuntimeUnderstandingMessage[];
+  now: number;
+  onInput: (value: string) => void;
+  onMode: (mode: "ask" | "steer") => void;
+  onStop: () => void;
+  onSubmit: (
+    textOverride?: string,
+    modeOverride?: "ask" | "steer",
+  ) => void;
+  pendingSteering: number;
+  presence: RuntimePresence | null;
+  runStatus: RuntimeRun["status"] | "ready";
+  understandingActivities: ActivityEntry[];
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [followLive, setFollowLive] = useState(true);
+  const latestActivityAt =
+    activities.at(-1)?.at ?? presence?.updatedAt ?? null;
+  const quietSeconds =
+    isRunning && latestActivityAt
+      ? Math.max(
+          0,
+          Math.floor((now - new Date(latestActivityAt).getTime()) / 1_000),
+        )
+      : 0;
+  const signal =
+    isRunning && quietSeconds >= 90
+      ? `Quiet ${formatRuntimeDuration(quietSeconds * 1_000)}`
+      : isRunning && quietSeconds >= 25
+        ? "Thinking"
+        : isRunning
+          ? "Live"
+          : runStatus === "ready"
+            ? "Ready"
+            : runStatus;
+  const actorLabel =
+    presence?.actor === "supervisor"
+      ? "Supervisor"
+      : presence
+        ? `Worker ${presence.iterationNumber}`
+        : isRunning
+          ? "Worker connecting"
+          : "No worker active";
+
+  useEffect(() => {
+    if (!followLive) return;
+    const frame = window.requestAnimationFrame(() => {
+      const scroll = scrollRef.current;
+      if (!scroll) return;
+      scroll.scrollTo({
+        top: scroll.scrollHeight,
+        behavior: "auto",
+      });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    activities.length,
+    followLive,
+    isUnderstanding,
+    messages.length,
+    understandingActivities.length,
+  ]);
+
+  const scrollToLive = () => {
+    const scroll = scrollRef.current;
+    if (!scroll) return;
+    setFollowLive(true);
+    scroll.scrollTo({
+      top: scroll.scrollHeight,
+      behavior: "auto",
+    });
+  };
+
+  return (
+    <aside
+      aria-label="Live worker and controls"
+      className="runtime-observer-panel"
+    >
+      <header>
+        <div>
+          <span className="eyebrow">Live runtime</span>
+          <h2>Worker stream</h2>
+        </div>
+        <div className="runtime-observer-header-actions">
+          <span
+            className={`runtime-observer-signal ${
+              isRunning
+                ? quietSeconds >= 90
+                  ? "is-quiet"
+                  : "is-live"
+                : ""
+            }`}
+          >
+            <i />
+            {signal}
+          </span>
+          {isRunning && (
+            <button
+              className="runtime-observer-stop"
+              onClick={onStop}
+              type="button"
+            >
+              Stop now
+            </button>
+          )}
+        </div>
+      </header>
+
+      <section className="runtime-observer-focus">
+        <div>
+          <span>{actorLabel}</span>
+          {presence?.phaseName && <em>{presence.phaseName}</em>}
+        </div>
+        <strong>
+          {presence?.assignmentTitle ??
+            (isRunning ? "Preparing the next assignment" : "Runtime is idle")}
+        </strong>
+        <p>{presence?.currentAction ?? activity}</p>
+        <small>
+          {activityNote ??
+            (isRunning
+              ? "Live operational events will appear below."
+              : "Start the loop when you are ready to continue.")}
+        </small>
+      </section>
+
+      <div className="runtime-observer-scroll-wrap">
+        <div
+          className="runtime-observer-scroll"
+          onScroll={(event) => {
+            const scroll = event.currentTarget;
+            const distanceFromBottom =
+              scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight;
+            setFollowLive(distanceFromBottom < 48);
+          }}
+          ref={scrollRef}
+        >
+          <section className="runtime-observer-events">
+          <header>
+            <strong>{isRunning ? "What the worker is doing" : "Last worker activity"}</strong>
+            <span>
+              {activities.length
+                ? `${activities.length} event${activities.length === 1 ? "" : "s"}`
+                : "Waiting for first event"}
+            </span>
+          </header>
+          {activities.length ? (
+            <ActivityFeed
+              entries={activities}
+              label="Live worker operational stream"
+              limit={18}
+              roomy
+              showTime
+            />
+          ) : (
+            <div className="runtime-observer-empty">
+              <span>·</span>
+              <p>
+                File reads, edits, commands, checks, progress reports, and
+                failures will stream here.
+              </p>
+            </div>
+          )}
+          </section>
+
+          <section className="runtime-observer-conversation">
+          <header>
+            <strong>Ask and intervene</strong>
+            <span>
+              {pendingSteering
+                ? `${pendingSteering} direction${pendingSteering === 1 ? "" : "s"} queued`
+                : "Independent read-only answers"}
+            </span>
+          </header>
+
+          {!messages.length && !isUnderstanding && (
+            <div className="runtime-observer-prompts">
+              {[
+                "What is happening right now?",
+                "Is the worker stuck or blocked?",
+                "What changed since the last iteration?",
+              ].map((prompt) => (
+                <button
+                  key={prompt}
+                  onClick={() => {
+                    onMode("ask");
+                    onSubmit(prompt, "ask");
+                  }}
+                  type="button"
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {messages.map((message) => (
+            <article
+              className={`runtime-observer-message is-${message.role}`}
+              key={message.id}
+            >
+              <header>
+                <small>
+                  {message.role === "user"
+                    ? "You"
+                    : message.role === "agent"
+                      ? `${agent === "codex" ? "Codex" : "Claude"} observer`
+                      : message.role === "steering"
+                        ? "Direction queued"
+                        : "Error"}
+                </small>
+                <time dateTime={message.at}>
+                  {new Intl.DateTimeFormat(undefined, {
+                    hour: "numeric",
+                    minute: "2-digit",
+                  }).format(new Date(message.at))}
+                </time>
+              </header>
+              <p>{message.text}</p>
+            </article>
+          ))}
+
+          {isUnderstanding && (
+            <div className="runtime-observer-reading">
+              <header>
+                <span className="runtime-observer-thinking">·</span>
+                <div>
+                  <strong>Observer is checking current evidence</strong>
+                  <small>
+                    It can read live operational context and durable state.
+                  </small>
+                </div>
+              </header>
+              {understandingActivities.length > 0 && (
+                <ActivityFeed
+                  entries={understandingActivities}
+                  label="Understanding agent activity"
+                  limit={6}
+                  showTime
+                />
+              )}
+            </div>
+          )}
+          </section>
+        </div>
+        {!followLive && (
+          <button
+            className="runtime-observer-jump-live"
+            onClick={scrollToLive}
+            type="button"
+          >
+            ↓ Jump to live
+          </button>
+        )}
+      </div>
+
+      <footer className="runtime-observer-composer">
+        <div className="runtime-composer-mode">
+          <button
+            className={composerMode === "ask" ? "is-active" : ""}
+            onClick={() => onMode("ask")}
+            type="button"
+          >
+            Ask observer
+          </button>
+          <button
+            className={composerMode === "steer" ? "is-active" : ""}
+            onClick={() => onMode("steer")}
+            type="button"
+          >
+            Steer loop
+          </button>
+        </div>
+        <textarea
+          aria-label="Ask about or steer the runtime"
+          disabled={isUnderstanding}
+          id="runtime-observer-input"
+          onChange={(event) => onInput(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              onSubmit();
+            }
+          }}
+          placeholder={
+            composerMode === "ask"
+              ? "Ask what is happening, why, or what changed…"
+              : "Give a direction for the next safe checkpoint…"
+          }
+          rows={3}
+          value={input}
+        />
+        <div>
+          <small>
+            {composerMode === "ask"
+              ? "A separate read-only agent answers from live and durable evidence."
+              : "Steering is durable and applies at the next safe integration. Stop now for immediate interruption."}
+          </small>
+          <button
+            className="button-primary"
+            disabled={!input.trim() || isUnderstanding}
+            onClick={() => onSubmit()}
+            type="button"
+          >
+            {isUnderstanding
+              ? "Reading…"
+              : composerMode === "ask"
+                ? "Ask"
+                : "Queue direction"}
+          </button>
+        </div>
+      </footer>
+    </aside>
+  );
+}
+
 export function LoopStudio({
   initialLoop,
   initialError = null,
@@ -2157,13 +2660,14 @@ export function LoopStudio({
   const [runtimeUnderstandingInput, setRuntimeUnderstandingInput] = useState("");
   const [runtimeUnderstandingMessages, setRuntimeUnderstandingMessages] =
     useState<RuntimeUnderstandingMessage[]>([]);
+  const [runtimeUnderstandingActivities, setRuntimeUnderstandingActivities] =
+    useState<ActivityEntry[]>([]);
   const [isRuntimeUnderstanding, setIsRuntimeUnderstanding] = useState(false);
   const [runtimeComposerMode, setRuntimeComposerMode] =
     useState<"ask" | "steer">("ask");
   const [runtimeMapZoom, setRuntimeMapZoom] = useState<FlowZoom>(1);
   const [selectedRuntimeRegionId, setSelectedRuntimeRegionId] =
     useState<string | null>(null);
-  const [isRuntimeCommandOpen, setIsRuntimeCommandOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wiringTestRunRef = useRef(0);
   const unifiedTestRunRef = useRef(0);
@@ -3528,19 +4032,25 @@ ${exactTraceFindings}`;
     }
   };
 
-  const submitRuntimeComposer = async () => {
-    const text = runtimeUnderstandingInput.trim();
+  const submitRuntimeComposer = async (
+    textOverride?: string,
+    modeOverride?: "ask" | "steer",
+  ) => {
+    const text = (textOverride ?? runtimeUnderstandingInput).trim();
+    const effectiveMode = modeOverride ?? runtimeComposerMode;
     if (!text || isRuntimeUnderstanding) return;
     setRuntimeUnderstandingInput("");
     setRuntimeError(null);
+    const submittedAt = new Date().toISOString();
 
-    if (runtimeComposerMode === "steer") {
+    if (effectiveMode === "steer") {
       setRuntimeUnderstandingMessages((current) => [
         ...current,
         {
           id: `${Date.now()}-steering`,
           role: "steering",
           text,
+          at: submittedAt,
         },
       ]);
       try {
@@ -3560,16 +4070,37 @@ ${exactTraceFindings}`;
         setRuntimeError(message);
         setRuntimeUnderstandingMessages((current) => [
           ...current,
-          { id: `${Date.now()}-error`, role: "error", text: message },
+          {
+            id: `${Date.now()}-error`,
+            role: "error",
+            text: message,
+            at: new Date().toISOString(),
+          },
         ]);
       }
       return;
     }
 
     setIsRuntimeUnderstanding(true);
+    setRuntimeUnderstandingActivities([
+      {
+        id: `${Date.now()}-understanding-start`,
+        at: submittedAt,
+        text: "Starting independent runtime observer",
+        detail: "Reading live activity, durable state, reports, and next work",
+        output: null,
+        kind: "session",
+        status: "active",
+      },
+    ]);
     setRuntimeUnderstandingMessages((current) => [
       ...current,
-      { id: `${Date.now()}-question`, role: "user", text },
+      {
+        id: `${Date.now()}-question`,
+        role: "user",
+        text,
+        at: submittedAt,
+      },
     ]);
     try {
       const response = await fetch(`${DAEMON_URL}/api/runtime/understand`, {
@@ -3597,6 +4128,11 @@ ${exactTraceFindings}`;
             .find((line) => line.startsWith("data: "));
           if (!dataLine) continue;
           const event = JSON.parse(dataLine.slice(6));
+          if (event.type === "activity") {
+            setRuntimeUnderstandingActivities((current) =>
+              appendActivity(current, event),
+            );
+          }
           if (event.type === "answer") answer = event.text;
           if (event.type === "error") throw new Error(event.text);
         }
@@ -3604,7 +4140,12 @@ ${exactTraceFindings}`;
       if (answer) {
         setRuntimeUnderstandingMessages((current) => [
           ...current,
-          { id: `${Date.now()}-answer`, role: "agent", text: answer },
+          {
+            id: `${Date.now()}-answer`,
+            role: "agent",
+            text: answer,
+            at: new Date().toISOString(),
+          },
         ]);
       }
     } catch (error) {
@@ -3612,9 +4153,21 @@ ${exactTraceFindings}`;
         error instanceof Error ? error.message : "The runtime agent could not answer.";
       setRuntimeUnderstandingMessages((current) => [
         ...current,
-        { id: `${Date.now()}-error`, role: "error", text: message },
+        {
+          id: `${Date.now()}-error`,
+          role: "error",
+          text: message,
+          at: new Date().toISOString(),
+        },
       ]);
     } finally {
+      setRuntimeUnderstandingActivities((current) =>
+        current.map((entry) =>
+          entry.status === "active"
+            ? { ...entry, status: "complete" as const }
+            : entry,
+        ),
+      );
       setIsRuntimeUnderstanding(false);
     }
   };
@@ -4788,7 +5341,6 @@ ${exactTraceFindings}`;
                       latestResult={runtimeSnapshot?.ledger.at(-1) ?? null}
                       onClose={() => {
                         setSelectedRuntimeRegionId(null);
-                        setIsRuntimeCommandOpen(false);
                       }}
                       onAsk={(region) => {
                         setSelectedRuntimeRegionId(region.id);
@@ -4796,7 +5348,9 @@ ${exactTraceFindings}`;
                         setRuntimeUnderstandingInput(
                           `What is happening in ${region.label}, what evidence supports its condition, and what should happen next?`,
                         );
-                        setIsRuntimeCommandOpen(true);
+                        window.requestAnimationFrame(() =>
+                          document.getElementById("runtime-observer-input")?.focus(),
+                        );
                       }}
                       onInspect={() => setRuntimeView("frontier")}
                       onReview={() => setRuntimeView("history")}
@@ -4804,7 +5358,6 @@ ${exactTraceFindings}`;
                         setSelectedRuntimeRegionId((current) =>
                           current === id ? null : id,
                         );
-                        setIsRuntimeCommandOpen(false);
                       }}
                       onSteer={(region) => {
                         setSelectedRuntimeRegionId(region.id);
@@ -4812,7 +5365,9 @@ ${exactTraceFindings}`;
                         setRuntimeUnderstandingInput(
                           `Prioritize ${region.label}: `,
                         );
-                        setIsRuntimeCommandOpen(true);
+                        window.requestAnimationFrame(() =>
+                          document.getElementById("runtime-observer-input")?.focus(),
+                        );
                       }}
                       onZoom={setRuntimeMapZoom}
                       objective={
@@ -4827,110 +5382,6 @@ ${exactTraceFindings}`;
                       unreviewedCount={runtimeUnreviewedCount}
                       zoom={runtimeMapZoom}
                     />
-
-                    {isRuntimeCommandOpen && selectedRuntimeRegion && (
-                      <section className="runtime-map-command-console">
-                        <header>
-                          <div>
-                            <small>
-                              {runtimeComposerMode === "ask"
-                                ? "Ask about"
-                                : "Direct work in"}
-                            </small>
-                            <strong>{selectedRuntimeRegion.label}</strong>
-                          </div>
-                          <button
-                            aria-label="Close command console"
-                            onClick={() => setIsRuntimeCommandOpen(false)}
-                            type="button"
-                          >
-                            ×
-                          </button>
-                        </header>
-
-                        {runtimeUnderstandingMessages.length > 0 && (
-                          <div className="runtime-map-command-history">
-                            {runtimeUnderstandingMessages.slice(-2).map((message) => (
-                              <article
-                                className={`is-${message.role}`}
-                                key={message.id}
-                              >
-                                <small>
-                                  {message.role === "user"
-                                    ? "You"
-                                    : message.role === "agent"
-                                      ? agent === "codex"
-                                        ? "Codex"
-                                        : "Claude"
-                                      : message.role === "steering"
-                                        ? "Direction queued"
-                                        : "Error"}
-                                </small>
-                                <p>{message.text}</p>
-                              </article>
-                            ))}
-                          </div>
-                        )}
-
-                        <div className="runtime-composer-mode">
-                          <button
-                            className={
-                              runtimeComposerMode === "ask" ? "is-active" : ""
-                            }
-                            onClick={() => setRuntimeComposerMode("ask")}
-                            type="button"
-                          >
-                            Ask
-                          </button>
-                          <button
-                            className={
-                              runtimeComposerMode === "steer"
-                                ? "is-active"
-                                : ""
-                            }
-                            onClick={() => setRuntimeComposerMode("steer")}
-                            type="button"
-                          >
-                            Steer
-                          </button>
-                        </div>
-                        <textarea
-                          autoFocus
-                          disabled={isRuntimeUnderstanding}
-                          onChange={(event) =>
-                            setRuntimeUnderstandingInput(event.target.value)
-                          }
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter" && !event.shiftKey) {
-                              event.preventDefault();
-                              void submitRuntimeComposer();
-                            }
-                          }}
-                          placeholder={
-                            runtimeComposerMode === "ask"
-                              ? "Ask what changed, what is blocked, or why this is next."
-                              : "Give a direction for this part of the project."
-                          }
-                          rows={3}
-                          value={runtimeUnderstandingInput}
-                        />
-                        <button
-                          className="button-primary"
-                          disabled={
-                            !runtimeUnderstandingInput.trim() ||
-                            isRuntimeUnderstanding
-                          }
-                          onClick={() => void submitRuntimeComposer()}
-                          type="button"
-                        >
-                          {isRuntimeUnderstanding
-                            ? "Reading state…"
-                            : runtimeComposerMode === "ask"
-                              ? "Ask runtime"
-                              : "Queue direction"}
-                        </button>
-                      </section>
-                    )}
                   </>
                 )}
 
@@ -5182,6 +5633,32 @@ ${exactTraceFindings}`;
               )}
               {runtimeError && <p className="runtime-error">{runtimeError}</p>}
             </section>
+            <RuntimeObserverPanel
+              activities={runtimeActivities}
+              activity={runtimeActivity}
+              activityNote={runtimeActivityNote}
+              agent={agent}
+              composerMode={runtimeComposerMode}
+              input={runtimeUnderstandingInput}
+              isRunning={isRuntimeRunning}
+              isUnderstanding={isRuntimeUnderstanding}
+              messages={runtimeUnderstandingMessages}
+              now={runtimeClock || Date.now()}
+              onInput={setRuntimeUnderstandingInput}
+              onMode={setRuntimeComposerMode}
+              onStop={() => void stopRuntime()}
+              onSubmit={(text, mode) =>
+                void submitRuntimeComposer(text, mode)
+              }
+              pendingSteering={
+                runtimeSnapshot?.steering.filter(
+                  (entry) => entry.status === "pending",
+                ).length ?? 0
+              }
+              presence={visibleRuntimePresence}
+              runStatus={runtimeRun?.status ?? "ready"}
+              understandingActivities={runtimeUnderstandingActivities}
+            />
           </div>
         </section>
       )}

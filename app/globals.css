@@ -6817,3 +6817,922 @@ p {
     flex-direction: column;
   }
 }
+
+/* Persistent runtime observer: live work, questions, and intervention in one place. */
+.runtime-workspace-grid {
+  grid-template-columns: minmax(0, 1fr) clamp(360px, 34vw, 480px);
+}
+
+.runtime-observer-panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  border-left: 1px solid #d7dcd7;
+  background: #fff;
+  box-shadow: -9px 0 24px rgba(34, 53, 40, 0.045);
+}
+
+.runtime-observer-panel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 14px 11px;
+  border-bottom: 1px solid #e2e5e1;
+}
+
+.runtime-observer-panel > header h2 {
+  margin: 2px 0 0;
+  font-size: 14px;
+}
+
+.runtime-observer-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.runtime-observer-signal {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 7px;
+  border-radius: 999px;
+  background: #f0f2ef;
+  color: #657169;
+  font-size: 7px;
+  font-weight: 850;
+  text-transform: capitalize;
+}
+
+.runtime-observer-signal i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #9aa49d;
+}
+
+.runtime-observer-signal.is-live {
+  background: #e5f3e9;
+  color: #227047;
+}
+
+.runtime-observer-signal.is-live i {
+  background: #2d9b5b;
+  box-shadow: 0 0 0 3px rgba(45, 155, 91, 0.12);
+  animation: runtime-worker-pulse 1.45s ease-in-out infinite;
+}
+
+.runtime-observer-signal.is-quiet {
+  background: #fff3df;
+  color: #8b5a1b;
+}
+
+.runtime-observer-signal.is-quiet i {
+  background: #c98228;
+}
+
+.runtime-observer-stop {
+  padding: 5px 7px;
+  border: 1px solid #d6aaa5;
+  border-radius: 6px;
+  background: #fff7f6;
+  color: #9b413a;
+  font-size: 7px;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.runtime-observer-focus {
+  padding: 11px 14px;
+  border-bottom: 1px solid #e4e8e4;
+  background:
+    radial-gradient(circle at 100% 0, rgba(49, 132, 78, 0.1), transparent 43%),
+    #f6faf6;
+}
+
+.runtime-observer-focus > div {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.runtime-observer-focus > div span,
+.runtime-observer-focus > div em {
+  font-size: 6px;
+  font-style: normal;
+  font-weight: 850;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.runtime-observer-focus > div span {
+  color: #2e7349;
+}
+
+.runtime-observer-focus > div em {
+  padding-left: 6px;
+  border-left: 1px solid #bdcbbf;
+  color: #6c786f;
+}
+
+.runtime-observer-focus > strong,
+.runtime-observer-focus > p,
+.runtime-observer-focus > small {
+  display: block;
+}
+
+.runtime-observer-focus > strong {
+  margin-top: 4px;
+  color: #26382c;
+  font-size: 10px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.runtime-observer-focus > p {
+  margin: 4px 0 0;
+  color: #3f5146;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.runtime-observer-focus > small {
+  margin-top: 3px;
+  color: #738078;
+  font-size: 7px;
+  line-height: 1.35;
+}
+
+.runtime-observer-scroll {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.runtime-observer-events,
+.runtime-observer-conversation {
+  padding: 12px 13px;
+}
+
+.runtime-observer-events {
+  border-bottom: 1px solid #e5e8e5;
+}
+
+.runtime-observer-events > header,
+.runtime-observer-conversation > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.runtime-observer-events > header strong,
+.runtime-observer-conversation > header strong {
+  color: #35443b;
+  font-size: 9px;
+}
+
+.runtime-observer-events > header span,
+.runtime-observer-conversation > header span {
+  color: #7d8781;
+  font-size: 6px;
+}
+
+.runtime-observer-panel .activity-feed {
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.runtime-observer-panel .activity-entry {
+  grid-template-columns: 17px minmax(0, 1fr);
+}
+
+.runtime-observer-panel .activity-entry header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.runtime-observer-panel .activity-entry-title {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: visible;
+  font-size: 8px;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.runtime-observer-panel .activity-entry-detail {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: visible;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 7px;
+  line-height: 1.45;
+  text-overflow: clip;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.runtime-observer-empty {
+  display: grid;
+  grid-template-columns: 17px minmax(0, 1fr);
+  align-items: start;
+  gap: 7px;
+  margin-top: 10px;
+  padding: 9px;
+  border: 1px dashed #d3d9d4;
+  border-radius: 8px;
+  background: #fafbf9;
+}
+
+.runtime-observer-empty > span {
+  display: grid;
+  width: 15px;
+  height: 15px;
+  place-items: center;
+  border-radius: 50%;
+  background: #e5f1e8;
+  color: #31744c;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.runtime-observer-empty p {
+  margin: 0;
+  color: #748078;
+  font-size: 7px;
+  line-height: 1.45;
+}
+
+.runtime-observer-conversation {
+  display: grid;
+  gap: 8px;
+}
+
+.runtime-observer-prompts {
+  display: grid;
+  gap: 5px;
+}
+
+.runtime-observer-prompts button {
+  padding: 7px 8px;
+  border: 1px solid #dce2dd;
+  border-radius: 7px;
+  background: #f8faf8;
+  color: #496154;
+  font-size: 7px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.runtime-observer-prompts button:hover {
+  border-color: #9eb6a4;
+  background: #f0f7f2;
+}
+
+.runtime-observer-message {
+  max-width: 94%;
+}
+
+.runtime-observer-message.is-user,
+.runtime-observer-message.is-steering {
+  margin-left: auto;
+}
+
+.runtime-observer-message > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+
+.runtime-observer-message > header small {
+  color: #78837c;
+  font-size: 6px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.runtime-observer-message > header time {
+  color: #9ba29e;
+  font-size: 6px;
+}
+
+.runtime-observer-message > p {
+  margin: 0;
+  padding: 8px 9px;
+  border-radius: 2px 9px 9px 9px;
+  background: #f0f2ef;
+  color: #3e4b43;
+  font-size: 8px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.runtime-observer-message.is-user > p {
+  border-radius: 9px 2px 9px 9px;
+  background: #263d2f;
+  color: #fff;
+}
+
+.runtime-observer-message.is-steering > p {
+  border: 1px solid #e2bd7d;
+  border-radius: 9px 2px 9px 9px;
+  background: #fff6e4;
+  color: #6d4b1f;
+}
+
+.runtime-observer-message.is-error > p {
+  background: #faeae7;
+  color: #a7463f;
+}
+
+.runtime-observer-reading {
+  padding: 9px;
+  border: 1px solid #cbd9ce;
+  border-radius: 8px;
+  background: #f7faf7;
+}
+
+.runtime-observer-reading > header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.runtime-observer-thinking {
+  display: grid;
+  width: 17px;
+  height: 17px;
+  place-items: center;
+  border-radius: 50%;
+  background: #dceee2;
+  color: #24724d;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.runtime-observer-reading > header strong,
+.runtime-observer-reading > header small {
+  display: block;
+}
+
+.runtime-observer-reading > header strong {
+  font-size: 8px;
+}
+
+.runtime-observer-reading > header small {
+  margin-top: 1px;
+  color: #738078;
+  font-size: 6px;
+}
+
+.runtime-observer-composer {
+  padding: 10px 11px;
+  border-top: 1px solid #dce1dc;
+  background: #f8faf7;
+}
+
+.runtime-observer-composer .runtime-composer-mode {
+  margin-bottom: 6px;
+}
+
+.runtime-observer-composer textarea {
+  width: 100%;
+  min-height: 58px;
+  padding: 8px 9px;
+  resize: none;
+  border: 1px solid #cfd7d1;
+  border-radius: 8px;
+  outline: 0;
+  background: #fff;
+  color: #27372d;
+  font: inherit;
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.runtime-observer-composer textarea:focus {
+  border-color: #68a27d;
+  box-shadow: 0 0 0 3px rgba(47, 124, 77, 0.09);
+}
+
+.runtime-observer-composer > div:last-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.runtime-observer-composer > div:last-child small {
+  color: #78827c;
+  font-size: 6px;
+  line-height: 1.35;
+}
+
+.runtime-observer-composer > div:last-child button {
+  flex: 0 0 auto;
+  padding: 6px 9px;
+  font-size: 7px;
+}
+
+@media (max-width: 920px) {
+  .runtime-workspace-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .runtime-observer-panel {
+    min-height: 640px;
+    border-top: 1px solid #d7dcd7;
+    border-left: 0;
+    box-shadow: none;
+  }
+}
+
+/* RTS-like worker action: actor, visible motion, and a concrete target. */
+.runtime-work-scene {
+  display: grid;
+  grid-template-columns: 58px minmax(34px, 0.32fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px 9px;
+  overflow: hidden;
+  border: 1px solid rgba(119, 200, 150, 0.28);
+  border-radius: 10px;
+  background:
+    radial-gradient(circle at 84% 0, rgba(93, 201, 137, 0.15), transparent 32%),
+    #153d2a;
+  color: white;
+}
+
+.runtime-mission.is-idle .runtime-work-scene {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: #4b5750;
+}
+
+.runtime-work-scene-unit {
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+}
+
+.runtime-work-scene-unit > i {
+  position: relative;
+  display: grid;
+  width: 29px;
+  height: 29px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.13);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+  box-shadow: 0 5px 12px rgba(0, 0, 0, 0.16);
+}
+
+.runtime-work-scene:not(.is-idle) .runtime-work-scene-unit > i {
+  animation: runtime-unit-working 1.25s ease-in-out infinite;
+}
+
+.runtime-work-scene-unit > span {
+  max-width: 58px;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 6px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-work-scene-motion {
+  position: relative;
+  height: 2px;
+  overflow: visible;
+  border-radius: 999px;
+  background: rgba(185, 231, 201, 0.21);
+}
+
+.runtime-work-scene-motion > i {
+  position: absolute;
+  top: -2px;
+  left: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #8ae0a8;
+  opacity: 0;
+  box-shadow: 0 0 8px rgba(119, 227, 155, 0.7);
+  animation: runtime-action-travel 1.65s linear infinite;
+}
+
+.runtime-work-scene-motion > i:nth-child(2) {
+  animation-delay: 0.52s;
+}
+
+.runtime-work-scene-motion > i:nth-child(3) {
+  animation-delay: 1.04s;
+}
+
+.runtime-work-scene.is-idle .runtime-work-scene-motion > i {
+  display: none;
+}
+
+.runtime-work-scene-target {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 31px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.runtime-work-scene-target > span {
+  position: relative;
+  display: grid;
+  width: 31px;
+  height: 31px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #d6f5e0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.runtime-work-scene.is-planning .runtime-work-scene-target > span,
+.runtime-work-scene.is-integrating .runtime-work-scene-target > span {
+  animation: runtime-target-orbit 2s linear infinite;
+}
+
+.runtime-work-scene.is-reading .runtime-work-scene-target > span::after,
+.runtime-work-scene.is-searching .runtime-work-scene-target > span::after {
+  position: absolute;
+  right: 4px;
+  left: 4px;
+  height: 1px;
+  background: #8ff0b1;
+  box-shadow: 0 0 6px #78dc9b;
+  content: "";
+  animation: runtime-target-scan 1.35s ease-in-out infinite;
+}
+
+.runtime-work-scene.is-writing .runtime-work-scene-target > span {
+  animation: runtime-target-write 0.75s steps(2, end) infinite;
+}
+
+.runtime-work-scene.is-running .runtime-work-scene-target > span {
+  animation: runtime-target-command 1s ease-in-out infinite;
+}
+
+.runtime-work-scene-target strong,
+.runtime-work-scene-target small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-work-scene-target strong {
+  font-size: 9px;
+}
+
+.runtime-work-scene-target small {
+  margin-top: 2px;
+  color: rgba(255, 255, 255, 0.68);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 6px;
+}
+
+.runtime-mission-location {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #557064;
+  font-size: 6px;
+  font-weight: 750;
+}
+
+.runtime-mission-location > span {
+  color: #2d7650;
+  font-weight: 900;
+}
+
+.runtime-mission-location > small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-region.has-unit {
+  min-height: 178px;
+}
+
+.runtime-region-live-action {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 7px;
+  border: 1px solid #a4ceb2;
+  border-radius: 8px;
+  background: #eaf6ed;
+}
+
+.runtime-region-live-action > span {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 6px;
+  background: #2c8150;
+  color: white;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 8px;
+  font-weight: 900;
+  animation: runtime-region-action 1.2s ease-in-out infinite;
+}
+
+.runtime-region-live-action > div {
+  min-width: 0;
+}
+
+.runtime-region-live-action strong,
+.runtime-region-live-action small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-region-live-action strong {
+  color: #245e3c;
+  font-size: 7px;
+}
+
+.runtime-region-live-action small {
+  margin-top: 1px;
+  color: #5d7667;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 6px;
+}
+
+@keyframes runtime-unit-working {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-2px);
+  }
+}
+
+@keyframes runtime-action-travel {
+  0% {
+    left: 0;
+    opacity: 0;
+    transform: scale(0.65);
+  }
+  18%,
+  78% {
+    opacity: 1;
+  }
+  100% {
+    left: calc(100% - 5px);
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+
+@keyframes runtime-target-orbit {
+  50% {
+    border-color: rgba(141, 235, 174, 0.72);
+    transform: rotate(180deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes runtime-target-scan {
+  0%,
+  100% {
+    top: 6px;
+    opacity: 0.35;
+  }
+  50% {
+    top: 24px;
+    opacity: 1;
+  }
+}
+
+@keyframes runtime-target-write {
+  50% {
+    background: rgba(115, 221, 151, 0.24);
+    color: white;
+  }
+}
+
+@keyframes runtime-target-command {
+  50% {
+    box-shadow: inset 0 -3px #70d593;
+  }
+}
+
+@keyframes runtime-region-action {
+  50% {
+    box-shadow: 0 0 0 4px rgba(44, 129, 80, 0.13);
+    transform: translateY(-1px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .runtime-work-scene *,
+  .runtime-region-live-action > span {
+    animation: none !important;
+  }
+}
+
+/* Long commands and paths must stay inside the worker-stream column. */
+.runtime-workspace-grid,
+.runtime-dashboard,
+.runtime-observer-panel,
+.runtime-observer-scroll,
+.runtime-observer-events,
+.runtime-observer-conversation,
+.runtime-observer-panel .activity-feed,
+.runtime-observer-panel .activity-entry,
+.runtime-observer-panel .activity-entry > div,
+.runtime-observer-panel .activity-entry header,
+.runtime-observer-panel .activity-output,
+.runtime-observer-panel .activity-output pre,
+.runtime-observer-message,
+.runtime-observer-message > p {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.runtime-workspace-grid,
+.runtime-observer-panel {
+  overflow: hidden;
+}
+
+.runtime-observer-scroll {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.runtime-observer-events,
+.runtime-observer-conversation,
+.runtime-observer-panel .activity-entry > div,
+.runtime-observer-message {
+  overflow: hidden;
+}
+
+.runtime-observer-focus > p,
+.runtime-observer-focus > small,
+.runtime-observer-panel .activity-entry strong,
+.runtime-observer-panel .activity-entry small,
+.runtime-observer-message > p,
+.runtime-observer-composer > div:last-child small {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.runtime-observer-panel .activity-output {
+  width: 100%;
+  contain: inline-size;
+}
+
+.runtime-observer-panel .activity-output summary {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-observer-panel .activity-output pre {
+  box-sizing: border-box;
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.runtime-observer-composer textarea {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+/* The live stream owns one scroll viewport and stops following when inspected. */
+.runtime-observer-scroll-wrap {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.runtime-observer-scroll-wrap > .runtime-observer-scroll {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  touch-action: pan-y;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.runtime-observer-panel .activity-feed.is-roomy .activity-entry strong,
+.runtime-observer-panel .activity-feed.is-roomy .activity-entry small,
+.runtime-observer-panel .runtime-observer-focus > strong,
+.runtime-observer-panel .runtime-observer-focus > p,
+.runtime-observer-panel .runtime-observer-focus > small {
+  display: block;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  -webkit-box-orient: initial;
+  -webkit-line-clamp: unset;
+}
+
+.runtime-observer-panel .activity-feed.is-roomy .activity-entry strong,
+.runtime-observer-panel .activity-feed.is-roomy .activity-entry small {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.runtime-observer-panel .activity-entry-title,
+.runtime-observer-panel .activity-entry-detail,
+.runtime-observer-panel .runtime-observer-focus > strong,
+.runtime-observer-panel .runtime-observer-focus > p,
+.runtime-observer-panel .runtime-observer-focus > small,
+.runtime-observer-panel .runtime-observer-reading strong,
+.runtime-observer-panel .runtime-observer-reading small,
+.runtime-observer-panel .runtime-observer-message > p {
+  min-width: 0;
+  max-width: 100%;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.runtime-observer-panel .activity-entry-title,
+.runtime-observer-panel .runtime-observer-focus > strong,
+.runtime-observer-panel .runtime-observer-focus > p,
+.runtime-observer-panel .runtime-observer-focus > small,
+.runtime-observer-panel .runtime-observer-reading strong,
+.runtime-observer-panel .runtime-observer-reading small {
+  white-space: normal;
+}
+
+.runtime-observer-panel .activity-entry-detail,
+.runtime-observer-panel .runtime-observer-message > p {
+  white-space: pre-wrap;
+}
+
+.runtime-observer-panel details,
+.runtime-observer-panel summary,
+.runtime-observer-panel time {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.runtime-observer-jump-live {
+  position: absolute;
+  z-index: 5;
+  right: 12px;
+  bottom: 10px;
+  padding: 6px 9px;
+  border: 1px solid #7daa8b;
+  border-radius: 999px;
+  background: #f5fff7;
+  color: #286846;
+  font-size: 7px;
+  font-weight: 850;
+  box-shadow: 0 6px 18px rgba(30, 72, 46, 0.18);
+  cursor: pointer;
+}

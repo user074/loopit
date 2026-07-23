@@ -80,6 +80,13 @@ test("construction keeps artifacts and runtime boundaries in separate sections",
   assert.match(daemon, /Never combine Artifacts and Boundaries under one heading/);
 });
 
+test("runtime understanding includes live operational context", () => {
+  assert.match(daemon, /Live operational context \(in-memory and not yet durable\)/);
+  assert.match(daemon, /Recent operational events/);
+  assert.match(daemon, /use the live operational context above/);
+  assert.match(daemon, /Observer is still reading/);
+});
+
 test("rehearsal verifies that the starting package can actually begin", () => {
   assert.match(daemon, /Inspect Starting work before tracing the cycle/);
   assert.match(daemon, /specific hypotheses and their initial evidence status, features and implementation status/);

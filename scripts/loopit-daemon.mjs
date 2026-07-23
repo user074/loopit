@@ -1023,12 +1023,36 @@ function runtimeUnderstandingCommandFor(agent, prompt) {
   };
 }
 
-function runtimeUnderstandingPrompt(question) {
+function runtimeUnderstandingPrompt(question, liveContext = null) {
+  const liveOperationalContext = liveContext
+    ? `Live operational context (in-memory and not yet durable):
+- Actor: ${liveContext.presence?.actor ?? "worker"}
+- Assignment: ${liveContext.presence?.assignmentTitle ?? "Connecting or selecting work"}
+- Loop phase: ${liveContext.presence?.phaseName ?? "Not reported"}
+- Current action: ${liveContext.presence?.currentAction ?? "Not reported"}
+- Last presence update: ${liveContext.presence?.updatedAt ?? "Not reported"}
+- Recent operational events:
+${
+  liveContext.activities.length
+    ? liveContext.activities
+        .map(
+          (entry) =>
+            `  - ${entry.at ?? "time unknown"} · ${entry.text}${
+              entry.detail ? ` · ${entry.detail}` : ""
+            }`,
+        )
+        .join("\n")
+    : "  - No normalized worker events have arrived yet."
+}`
+    : `Live operational context:
+- No runtime worker is active.`;
   return `You are the interactive understanding agent for a long-running Loopit project. You are independent from the worker and read-only.
 
 Read .loopit/runtime/STATE.md, .loopit/runtime/LEDGER.md, pending .loopit/runtime/STEERING.md when present, and the relevant reports under .loopit/runtime/reports/. Inspect referenced project artifacts when useful. Answer the user's question from durable evidence, not assumptions.
 
-Lead with the current situation in plain language. Distinguish deliverables that exist from beliefs or interpretations. Explain what changed, what worked, what failed or remains uncertain, which assignment is active, and what the frontier says will happen next when relevant. Cite state item IDs, iteration IDs, report paths, and project files inline so the user can audit important claims. If the requested fact is not recorded, say so.
+${liveOperationalContext}
+
+Lead with the current situation in plain language. For questions about what is happening now, use the live operational context above and clearly distinguish it from integrated evidence. Distinguish deliverables that exist from beliefs or interpretations. Explain what changed, what worked, what failed or remains uncertain, which assignment is active, and what the frontier says will happen next when relevant. Cite state item IDs, iteration IDs, report paths, and project files inline so the user can audit important claims. If the requested fact is not recorded, say so.
 
 Do not modify files, change state, or issue steering. A human steering instruction is recorded separately through the control panel.
 
@@ -2012,9 +2036,16 @@ async function streamRuntimeUnderstanding(request, response) {
     String(body.question ?? "").trim() ||
     "What is the current state, what changed recently, and what happens next?";
   const agent = body.agent === "claude" ? "claude" : "codex";
+  const liveContext =
+    activeRun?.purpose === "runtime"
+      ? {
+          presence: activeRun.presence,
+          activities: (activeRun.activities ?? []).slice(-20),
+        }
+      : null;
   const invocation = runtimeUnderstandingCommandFor(
     agent,
-    runtimeUnderstandingPrompt(question),
+    runtimeUnderstandingPrompt(question, liveContext),
   );
 
   response.writeHead(200, {
@@ -2040,11 +2071,38 @@ async function streamRuntimeUnderstanding(request, response) {
   let answer = "";
   let providerError = "";
   const claudeToolUses = new Map();
+  let lastActivityAt = Date.now();
+  let lastActivityText = "Starting the runtime observer";
+  const sendActivity = (progress) => {
+    lastActivityAt = Date.now();
+    lastActivityText = progress.text;
+    send({
+      type: "activity",
+      at: new Date().toISOString(),
+      ...progress,
+    });
+  };
+  const heartbeat = setInterval(() => {
+    if (child.exitCode !== null || child.killed) return;
+    const quietSeconds = Math.max(
+      1,
+      Math.floor((Date.now() - lastActivityAt) / 1_000),
+    );
+    send({
+      type: "activity",
+      id: "runtime-understanding-heartbeat",
+      at: new Date().toISOString(),
+      text: "Observer is still reading",
+      detail: `${quietSeconds}s since the last event · ${lastActivityText}`,
+      kind: "heartbeat",
+      status: "active",
+    });
+  }, 15_000);
 
   const handleEvent = (event) => {
     if (agent === "codex") {
       const progress = codexActivity(event, "understanding");
-      if (progress) send({ type: "activity", ...progress });
+      if (progress) sendActivity(progress);
       if (
         event.type === "item.completed" &&
         event.item?.type === "agent_message"
@@ -2062,7 +2120,7 @@ async function streamRuntimeUnderstanding(request, response) {
       "understanding",
       claudeToolUses,
     )) {
-      send({ type: "activity", ...progress });
+      sendActivity(progress);
     }
     if (event.type === "result") {
       answer = event.result ?? answer;
@@ -2088,9 +2146,11 @@ async function streamRuntimeUnderstanding(request, response) {
     stderrBuffer = `${stderrBuffer}${chunk.toString()}`.slice(-12_000);
   });
   child.on("error", (error) => {
+    clearInterval(heartbeat);
     providerError = `${invocation.command} could not be started: ${error.message}`;
   });
   child.on("close", (code, signal) => {
+    clearInterval(heartbeat);
     activeUnderstanding = null;
     const interrupted = signal === "SIGTERM";
     const failure =

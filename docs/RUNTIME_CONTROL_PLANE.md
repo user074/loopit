@@ -530,6 +530,13 @@ The Runtime workspace uses one integrated command map. Work, workers, and
 commands are not separate panels: selecting an area reveals its evidence and
 places understanding and steering controls beside it.
 
+A persistent observer panel sits beside the map. It streams the normalized
+worker transcript—progress reports, file reads and writes, commands and
+outputs, checks, failures, heartbeats, assignment, and loop phase—so elapsed
+time is never the only indication that work is continuing. A quiet indicator
+is descriptive rather than diagnostic: it shows how long the event stream has
+been quiet without falsely declaring that a thinking agent is stuck.
+
 ### Persistent runtime header
 
 - Running, paused, stopping, failed, or completed status.
@@ -570,6 +577,22 @@ last activity. A worker can emit
 `LOOPIT_PHASE: <state-id> | <current action>`; visible tool activity provides a
 conservative phase fallback when no explicit check-in arrives.
 
+Presence alone is insufficient. The central mission also renders an
+RTS-inspired action scene:
+
+```text
+Worker → visible activity → concrete target
+```
+
+Normalized event kinds translate into a small, stable visual vocabulary:
+planning, reading, editing, running a command or test, searching, reporting,
+and integrating. Motion shows that the action is continuing, while the target
+names the actual file, command, query, tool, or progress update. The affected
+project area echoes the same action. This gives the map an immediate
+"the worker is editing this file" signal; the observer transcript remains the
+place for exact output and audit detail. Animation respects reduced-motion
+preferences and never substitutes for textual status.
+
 Each area shows an actual progress bar:
 
 ```text
@@ -602,6 +625,16 @@ to. The Ask agent remains read-only. Steering remains a durable input applied
 at the next safe integration point. While an actor is present, its affected
 area carries a high-contrast live badge and glow; inactive areas recede without
 disappearing.
+
+The observer panel is also the runtime conversation and intervention surface.
+**Ask observer** launches a separate read-only agent that receives recent
+in-memory operational events as explicitly non-durable context and checks them
+against state, ledger, reports, and project evidence. Its own reads and tool
+activity stream into the panel while it answers. **Steer loop** records a
+durable direction for the supervisor to apply at the next safe integration
+point. **Stop now** interrupts the current worker when waiting for integration
+would be inappropriate. These semantics are shown beside the composer so
+queued steering is not mistaken for immediate interruption.
 
 Secondary views can expose:
 
