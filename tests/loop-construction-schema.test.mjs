@@ -14,24 +14,24 @@ const schema = JSON.parse(
 
 test("construction schema hard-selects every parser enum", () => {
   assert.deepEqual(schema.properties.action.enum, ["ask", "update", "no-change"]);
-  assert.deepEqual(schema.$defs.startingPackageItem.properties.role.enum, [
+  assert.deepEqual(schema.definitions.startingPackageItem.properties.role.enum, [
     "state",
     "frontier",
     "foundation",
     "first-work",
   ]);
-  assert.deepEqual(schema.$defs.boundary.properties.kind.enum, [
+  assert.deepEqual(schema.definitions.boundary.properties.kind.enum, [
     "interrupt",
     "complete",
     "budget",
   ]);
-  assert.deepEqual(schema.$defs.transition.properties.kind.enum, [
+  assert.deepEqual(schema.definitions.transition.properties.kind.enum, [
     "normal",
     "continue",
     "interrupt",
     "complete",
   ]);
-  assert.deepEqual(schema.$defs.state.properties.kind.enum, [
+  assert.deepEqual(schema.definitions.state.properties.kind.enum, [
     "observe",
     "decide",
     "act",
@@ -43,6 +43,15 @@ test("construction schema hard-selects every parser enum", () => {
   ]);
 });
 
+test("construction schema stays compatible with Claude Code draft-07 validation", () => {
+  assert.equal(schema.$schema, "http://json-schema.org/draft-07/schema#");
+  assert.ok(schema.definitions);
+  assert.equal(Object.hasOwn(schema, "$defs"), false);
+
+  const source = JSON.stringify(schema);
+  assert.doesNotMatch(source, /#\/\$defs\//);
+});
+
 test("every structured loop object requires its machine ID", () => {
   for (const definition of [
     "startingPackageItem",
@@ -51,7 +60,7 @@ test("every structured loop object requires its machine ID", () => {
     "transition",
     "state",
   ]) {
-    assert.ok(schema.$defs[definition].required.includes("id"), definition);
-    assert.equal(schema.$defs[definition].additionalProperties, false);
+    assert.ok(schema.definitions[definition].required.includes("id"), definition);
+    assert.equal(schema.definitions[definition].additionalProperties, false);
   }
 });

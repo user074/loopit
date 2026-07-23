@@ -1,5 +1,5 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -12,13 +12,13 @@
     },
     "loop": {
       "anyOf": [
-        { "$ref": "#/$defs/loop" },
+        { "$ref": "#/definitions/loop" },
         { "type": "null" }
       ]
     }
   },
   "required": ["action", "message", "loop"],
-  "$defs": {
+  "definitions": {
     "startingPackageItem": {
       "type": "object",
       "additionalProperties": false,
@@ -107,7 +107,7 @@
         "completion": { "type": "string" },
         "transitions": {
           "type": "array",
-          "items": { "$ref": "#/$defs/transition" }
+          "items": { "$ref": "#/definitions/transition" }
         }
       },
       "required": [
@@ -141,19 +141,19 @@
         "startState": { "type": "string" },
         "startingPackage": {
           "type": "array",
-          "items": { "$ref": "#/$defs/startingPackageItem" }
+          "items": { "$ref": "#/definitions/startingPackageItem" }
         },
         "artifacts": {
           "type": "array",
-          "items": { "$ref": "#/$defs/artifact" }
+          "items": { "$ref": "#/definitions/artifact" }
         },
         "boundaries": {
           "type": "array",
-          "items": { "$ref": "#/$defs/boundary" }
+          "items": { "$ref": "#/definitions/boundary" }
         },
         "states": {
           "type": "array",
-          "items": { "$ref": "#/$defs/state" }
+          "items": { "$ref": "#/definitions/state" }
         }
       },
       "required": [
