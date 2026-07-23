@@ -144,6 +144,9 @@ test("runtime is gated by the current passed revision and uses a separate worker
   assert.match(daemon, /Loopit—not this worker—owns integration/);
   assert.match(daemon, /Do not edit any file under \.loopit\//);
   assert.match(daemon, /Execute only that assignment/);
+  assert.match(daemon, /LOOPIT_PHASE:/);
+  assert.match(daemon, /type: "presence"/);
+  assert.match(daemon, /phaseCheckIn/);
   assert.match(daemon, /# Iteration report/);
   assert.match(daemon, /You are the Loopit runtime supervisor integrating one bounded worker result/);
   assert.match(daemon, /Return the full next direction, full state item list, full frontier/);
@@ -153,6 +156,7 @@ test("runtime is gated by the current passed revision and uses a separate worker
   assert.match(daemon, /handoff\.outcome === "continue"/);
   assert.match(daemon, /runtime\/STATE\.md/);
   assert.match(daemon, /runtime\/LEDGER\.md/);
+  assert.match(daemon, /runtimeReviewPath/);
   assert.match(daemon, /url\.pathname === "\/api\/run"/);
   assert.match(daemon, /mkdir\(runsDir/);
   assert.match(daemon, /activeRun\?\.purpose === "runtime"/);

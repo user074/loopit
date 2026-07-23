@@ -130,6 +130,7 @@ const report = understanding
       relaxations: []
     })
   : [
+      "LOOPIT_PHASE: observe-work | Executing the leased feature and collecting evidence",
       "# Iteration report",
       "## Summary",
       "Completed one bounded feature and collected evidence.",
@@ -248,6 +249,9 @@ Verdict: PASS
   assert.match(events, /"output":"18 tests passed"/);
   assert.match(events, /"text":"Web search finished"/);
   assert.match(events, /"text":"Agent turn finished"/);
+  assert.match(events, /"type":"presence"/);
+  assert.match(events, /"phaseId":"observe-work"/);
+  assert.match(events, /"source":"worker"/);
 
   const latestResponse = await fetch(`${origin}/api/run`);
   const { run, runs } = await latestResponse.json();
@@ -301,6 +305,16 @@ Verdict: PASS
   assert.equal(runtime.ledger[0].completed, "Feature one");
   assert.equal(runtime.ledger[1].completed, "Feature two");
   assert.equal(runtime.state.frontier[0].status, "waiting");
+  assert.equal(runtime.review.lastReviewedLedger, 0);
+
+  const reviewResponse = await fetch(`${origin}/api/runtime/review`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ through: 2 }),
+  });
+  assert.equal(reviewResponse.status, 200);
+  const reviewedRuntime = await reviewResponse.json();
+  assert.equal(reviewedRuntime.review.lastReviewedLedger, 2);
 
   const stateMarkdown = await readFile(
     path.join(loopitDir, "runtime", "STATE.md"),
@@ -314,11 +328,16 @@ Verdict: PASS
     path.join(loopitDir, "runtime", "reports", "iteration-0001.md"),
     "utf8",
   );
+  const reviewMarkdown = await readFile(
+    path.join(loopitDir, "runtime", "REVIEW.md"),
+    "utf8",
+  );
   assert.match(stateMarkdown, /# Runtime state/);
   assert.match(stateMarkdown, /## Frontier/);
   assert.match(ledgerMarkdown, /## Iteration 1 —/);
   assert.match(ledgerMarkdown, /## Iteration 2 —/);
   assert.match(firstReport, /# Iteration report/);
+  assert.match(reviewMarkdown, /last-reviewed-ledger: 2/);
 
   const steeringResponse = await fetch(`${origin}/api/runtime/steer`, {
     method: "POST",

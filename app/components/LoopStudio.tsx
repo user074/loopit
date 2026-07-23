@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import type {
   CompletionPolicy,
   LoopDefinition,
@@ -14,6 +21,11 @@ import type {
 import { primarySequence, stateHandoff } from "@/lib/loop-flow";
 import type { PrimarySequence } from "@/lib/loop-flow";
 import { validateLoop } from "@/lib/loop-validation";
+import {
+  buildRuntimeMap,
+  runtimeRegionLabel,
+  type RuntimeMapRegion,
+} from "@/lib/runtime-map";
 import {
   extractHumanReview,
   type HumanReviewRequest,
@@ -217,7 +229,33 @@ interface RuntimeSnapshot {
   state: RuntimeState | null;
   ledger: RuntimeLedgerEntry[];
   steering: RuntimeSteering[];
+  review: {
+    lastReviewedLedger: number;
+    reviewedAt: string | null;
+  };
   loopRevision: number | null;
+  presence: RuntimePresence | null;
+}
+
+interface RuntimePresence {
+  actor: "worker" | "supervisor";
+  status:
+    | "working"
+    | "integrating"
+    | "moving"
+    | "paused"
+    | "completed"
+    | "problem";
+  assignmentId: string;
+  assignmentTitle: string;
+  regionId: string;
+  phaseId: string | null;
+  phaseName: string;
+  currentAction: string;
+  detail?: string | null;
+  iterationNumber: number;
+  source: "worker" | "inferred" | "runtime";
+  updatedAt: string;
 }
 
 interface RuntimeUnderstandingMessage {
@@ -1571,6 +1609,489 @@ function StateFlowCanvas({
   );
 }
 
+const RUNTIME_CONDITION_LABEL: Record<
+  RuntimeMapRegion["condition"],
+  string
+> = {
+  active: "Active",
+  supported: "Complete",
+  review: "Review",
+  ready: "Ready",
+  waiting: "Waiting",
+  uncertain: "Uncertain",
+  failed: "Problem",
+};
+
+const RUNTIME_CONDITION_MARK: Record<
+  RuntimeMapRegion["condition"],
+  string
+> = {
+  active: "◉",
+  supported: "✓",
+  review: "●",
+  ready: "○",
+  waiting: "⚠",
+  uncertain: "△",
+  failed: "!",
+};
+
+const RUNTIME_HIGHLIGHT_MARK = {
+  active: "◉",
+  complete: "✓",
+  review: "●",
+  ready: "○",
+  waiting: "⚠",
+  uncertain: "△",
+  failed: "!",
+} as const;
+
+const RUNTIME_MAP_ZOOM_LABEL: Record<FlowZoom, string> = {
+  0: "Overview",
+  1: "Trajectory",
+  2: "Evidence",
+};
+
+const RUNTIME_MAP_ZOOM_DESCRIPTION: Record<FlowZoom, string> = {
+  0: "Area progress and health",
+  1: "Past result, current work, and next item",
+  2: "Tracked units, evidence, and unresolved signals",
+};
+
+function RuntimeOperationsMap({
+  regions,
+  selectedRegion,
+  presence,
+  phases,
+  objective,
+  currentObjective,
+  unreviewedCount,
+  latestResult,
+  latestActivity,
+  isRunning,
+  zoom,
+  onSelect,
+  onClose,
+  onAsk,
+  onSteer,
+  onInspect,
+  onReview,
+  onZoom,
+}: {
+  regions: RuntimeMapRegion[];
+  selectedRegion: RuntimeMapRegion | null;
+  presence: RuntimePresence | null;
+  phases: LoopState[];
+  objective: string;
+  currentObjective: string;
+  unreviewedCount: number;
+  latestResult: RuntimeLedgerEntry | null;
+  latestActivity: ActivityEntry | null;
+  isRunning: boolean;
+  zoom: FlowZoom;
+  onSelect: (id: string) => void;
+  onClose: () => void;
+  onAsk: (region: RuntimeMapRegion) => void;
+  onSteer: (region: RuntimeMapRegion) => void;
+  onInspect: () => void;
+  onReview: () => void;
+  onZoom: (zoom: FlowZoom) => void;
+}) {
+  const activePhaseIndex = phases.findIndex(
+    (phase) => phase.id === presence?.phaseId,
+  );
+  const activeRegion = regions.find(
+    (region) =>
+      presence &&
+      (region.id === presence.regionId ||
+        region.memberIds.includes(presence.regionId)),
+  );
+  const completedCount = regions.reduce(
+    (total, region) => total + region.completedCount,
+    0,
+  );
+  const uncertaintyCount = regions.reduce(
+    (total, region) => total + region.uncertaintyCount,
+    0,
+  );
+  const blockedCount = regions.reduce(
+    (total, region) =>
+      total +
+      region.issueCount +
+      (region.condition === "waiting" ? 1 : 0),
+    0,
+  );
+  const topRegions = regions.slice(0, 3);
+  const bottomRegions = regions.slice(3, 6);
+
+  const renderRegion = (region: RuntimeMapRegion, index: number) => {
+    const hasUnit = activeRegion?.id === region.id;
+    const selected = selectedRegion?.id === region.id;
+    const trajectory = [
+      { slot: "Past", moment: region.past },
+      { slot: "Now", moment: region.present },
+      { slot: "Next", moment: region.future },
+    ].filter(
+      (
+        item,
+      ): item is {
+        slot: string;
+        moment: NonNullable<RuntimeMapRegion["past"]>;
+      } => Boolean(item.moment),
+    );
+    return (
+      <article
+        aria-label={`${region.label}, ${region.progress}% of tracked work resolved`}
+        className={`runtime-region is-${region.condition} ${
+          selected ? "is-selected" : ""
+        } ${hasUnit ? "has-unit" : ""}`}
+        key={region.id}
+        onClick={() => onSelect(region.id)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onSelect(region.id);
+          }
+        }}
+        role="button"
+        style={
+          {
+            "--region-order": index,
+          } as CSSProperties
+        }
+        tabIndex={0}
+      >
+        <header>
+          <strong>{region.label}</strong>
+          <span>{region.progress}%</span>
+        </header>
+        <div
+          aria-label={region.progressLabel}
+          aria-valuemax={100}
+          aria-valuemin={0}
+          aria-valuenow={region.progress}
+          className="runtime-region-progress"
+          role="progressbar"
+          title={`${region.progress}% — ${region.progressLabel}`}
+        >
+          <span style={{ width: `${region.progress}%` }} />
+        </div>
+        {hasUnit && presence && (
+          <span className="runtime-region-worker-badge">
+            <i>◉</i>
+            {presence.actor === "worker"
+              ? `Worker ${presence.iterationNumber}`
+              : "Supervisor"}
+          </span>
+        )}
+        {zoom === 0 ? (
+          <div className={`runtime-region-status is-${region.condition}`}>
+            <span>{RUNTIME_CONDITION_MARK[region.condition]}</span>
+            <strong>{RUNTIME_CONDITION_LABEL[region.condition]}</strong>
+            <small>
+              {region.reviewCount > 0
+                ? `${region.reviewCount} result${region.reviewCount === 1 ? "" : "s"} to review`
+                : region.progressLabel}
+            </small>
+          </div>
+        ) : (
+          <ul className="runtime-region-trajectory">
+            {trajectory.length ? (
+              trajectory.map(({ slot, moment }) => (
+                <li className={`is-${moment.tone}`} key={slot}>
+                  <b>{slot}</b>
+                  <span>{RUNTIME_HIGHLIGHT_MARK[moment.tone]}</span>
+                  <small>{moment.label}</small>
+                </li>
+              ))
+            ) : (
+              <li className="is-ready">
+                <b>Next</b>
+                <span>○</span>
+                <small>No result recorded yet</small>
+              </li>
+            )}
+          </ul>
+        )}
+        {zoom === 2 && (
+          <dl className="runtime-region-evidence">
+            <div>
+              <dt>Evidence</dt>
+              <dd>{region.evidenceCount}</dd>
+            </div>
+            <div>
+              <dt>Uncertain</dt>
+              <dd>{region.uncertaintyCount}</dd>
+            </div>
+            <div>
+              <dt>Problems</dt>
+              <dd>{region.issueCount}</dd>
+            </div>
+          </dl>
+        )}
+        <footer>
+          <span>{region.progressLabel}</span>
+          {hasUnit && <b>Live here</b>}
+          {!hasUnit && region.reviewCount > 0 && (
+            <b>{region.reviewCount} to review</b>
+          )}
+        </footer>
+      </article>
+    );
+  };
+
+  return (
+    <section className="runtime-operations-map">
+      <header className="runtime-map-heading">
+        <div>
+          <span className="eyebrow">Project command map</span>
+          <h2>{isRunning ? "Work is advancing" : "Project overview"}</h2>
+          <p>
+            <b>Goal</b>
+            {objective}
+          </p>
+        </div>
+        <div className="runtime-map-heading-actions">
+          <div
+            aria-label="Runtime map detail"
+            className="runtime-semantic-zoom"
+          >
+            <button
+              aria-label="Show less map detail"
+              disabled={zoom === 0}
+              onClick={() => onZoom(Math.max(0, zoom - 1) as FlowZoom)}
+              type="button"
+            >
+              −
+            </button>
+            <span>
+              <strong>{RUNTIME_MAP_ZOOM_LABEL[zoom]}</strong>
+              <small>{RUNTIME_MAP_ZOOM_DESCRIPTION[zoom]}</small>
+            </span>
+            <button
+              aria-label="Show more map detail"
+              disabled={zoom === 2}
+              onClick={() => onZoom(Math.min(2, zoom + 1) as FlowZoom)}
+              type="button"
+            >
+              +
+            </button>
+          </div>
+          {unreviewedCount > 0 ? (
+            <button
+              className="runtime-review-chip"
+              onClick={onReview}
+              type="button"
+            >
+              <span>●</span>
+              <strong>{unreviewedCount} finished</strong>
+              <small>Not reviewed by you</small>
+            </button>
+          ) : (
+            <span className="runtime-review-clear">✓ You are caught up</span>
+          )}
+        </div>
+      </header>
+
+      <div className="runtime-terrain">
+        <div className="runtime-terrain-grid" aria-hidden="true" />
+        {regions.length ? (
+          <div
+            className={`runtime-map-board runtime-map-zoom-${zoom} ${
+              presence ? "has-live-worker" : ""
+            }`}
+          >
+            <div className="runtime-region-row is-top">
+              {topRegions.map((region, index) => renderRegion(region, index))}
+            </div>
+
+            <section
+              className={`runtime-mission ${presence ? "is-active" : "is-idle"}`}
+            >
+              <span>{presence ? "◉ Current mission" : "Next mission"}</span>
+              <h3>{presence?.assignmentTitle ?? currentObjective}</h3>
+              <div className="runtime-mission-worker">
+                <i>{presence?.actor === "supervisor" ? "S" : "W"}</i>
+                <div>
+                  <strong>
+                    {presence
+                      ? presence.actor === "worker"
+                        ? `Worker ${presence.iterationNumber}`
+                        : "Supervisor"
+                      : "No worker deployed"}
+                  </strong>
+                  <small>
+                    {presence?.currentAction ??
+                      "Start the loop to deploy the next bounded assignment"}
+                  </small>
+                </div>
+                <em>
+                  {presence
+                    ? `${activeRegion?.label ?? "Project"} · ${presence.phaseName}`
+                    : "Ready"}
+                </em>
+              </div>
+              <ol aria-label="Worker loop position">
+                {phases.map((phase, phaseIndex) => (
+                  <li
+                    className={
+                      phase.id === presence?.phaseId
+                        ? "is-current"
+                        : activePhaseIndex >= 0 && phaseIndex < activePhaseIndex
+                          ? "is-complete"
+                          : ""
+                    }
+                    key={phase.id}
+                  >
+                    <span />
+                    <small>{phase.name}</small>
+                  </li>
+                ))}
+              </ol>
+            </section>
+
+            {bottomRegions.length > 0 && (
+              <div className="runtime-region-row is-bottom">
+                {bottomRegions.map((region, index) =>
+                  renderRegion(region, index + 3),
+                )}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="runtime-map-empty">
+            <span>◇</span>
+            <strong>No project areas are mapped yet</strong>
+            <p>
+              The first runtime state will turn hypotheses, features, design
+              questions, opportunities, or other domain work into this map.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {selectedRegion && (
+        <section
+          className={`runtime-area-dock is-${selectedRegion.condition}`}
+        >
+          <header>
+            <div>
+              <span>{RUNTIME_CONDITION_MARK[selectedRegion.condition]}</span>
+              <div>
+                <small>
+                  {RUNTIME_CONDITION_LABEL[selectedRegion.condition]} area
+                </small>
+                <h3>{selectedRegion.label}</h3>
+              </div>
+            </div>
+            <button
+              aria-label="Close area details"
+              className="runtime-area-dock-close"
+              onClick={onClose}
+              type="button"
+            >
+              ×
+            </button>
+          </header>
+
+          <div className="runtime-area-dock-trajectory">
+            <article>
+              <span>Past</span>
+              <strong>
+                {selectedRegion.past?.label ?? "No integrated result yet"}
+              </strong>
+              <p>
+                {selectedRegion.past?.detail ??
+                  "This area has no completed result in the ledger yet."}
+              </p>
+            </article>
+            <article className={selectedRegion.present ? "is-active" : ""}>
+              <span>Current</span>
+              <strong>
+                {selectedRegion.present?.label ??
+                  RUNTIME_CONDITION_LABEL[selectedRegion.condition]}
+              </strong>
+              <p>
+                {selectedRegion.present?.detail ?? selectedRegion.summary}
+              </p>
+            </article>
+            <article>
+              <span>Next</span>
+              <strong>
+                {selectedRegion.future?.label ?? "No next item declared"}
+              </strong>
+              <p>
+                {selectedRegion.future?.detail ?? selectedRegion.doneWhen}
+              </p>
+            </article>
+          </div>
+
+          <div className="runtime-area-dock-details">
+            <div className="runtime-area-dock-progress">
+              <div
+                aria-label={selectedRegion.progressLabel}
+                aria-valuemax={100}
+                aria-valuemin={0}
+                aria-valuenow={selectedRegion.progress}
+                className="runtime-region-progress is-large"
+                role="progressbar"
+              >
+                <span style={{ width: `${selectedRegion.progress}%` }} />
+              </div>
+              <strong>
+                {selectedRegion.progress}% · {selectedRegion.progressLabel}
+              </strong>
+            </div>
+            <dl>
+              <div>
+                <dt>Objective</dt>
+                <dd>{selectedRegion.objective}</dd>
+              </div>
+              <div>
+                <dt>Resolved when</dt>
+                <dd>{selectedRegion.doneWhen}</dd>
+              </div>
+            </dl>
+          </div>
+
+          <footer>
+            <button onClick={() => onAsk(selectedRegion)} type="button">
+              Ask about this
+            </button>
+            <button onClick={() => onSteer(selectedRegion)} type="button">
+              Issue direction
+            </button>
+            <button onClick={onInspect} type="button">
+              Inspect details
+            </button>
+          </footer>
+        </section>
+      )}
+
+      <div className="runtime-map-ribbon">
+        <div className="runtime-map-metrics">
+          <span className="is-complete">✓ {completedCount} advances</span>
+          <span className="is-review">● {unreviewedCount} to review</span>
+          <span className="is-uncertain">△ {uncertaintyCount} uncertain</span>
+          <span className="is-failed">! {blockedCount} blocked</span>
+          <span className="is-active">◉ {presence ? 1 : 0} active</span>
+        </div>
+        <p>
+          <b>Latest</b>
+          {latestResult?.completed ??
+            latestActivity?.text ??
+            "No integrated result yet"}
+          <span>
+            →{" "}
+            {latestResult?.next ??
+              presence?.currentAction ??
+              currentObjective}
+          </span>
+        </p>
+      </div>
+    </section>
+  );
+}
+
 export function LoopStudio({
   initialLoop,
   initialError = null,
@@ -1639,6 +2160,10 @@ export function LoopStudio({
   const [isRuntimeUnderstanding, setIsRuntimeUnderstanding] = useState(false);
   const [runtimeComposerMode, setRuntimeComposerMode] =
     useState<"ask" | "steer">("ask");
+  const [runtimeMapZoom, setRuntimeMapZoom] = useState<FlowZoom>(1);
+  const [selectedRuntimeRegionId, setSelectedRuntimeRegionId] =
+    useState<string | null>(null);
+  const [isRuntimeCommandOpen, setIsRuntimeCommandOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wiringTestRunRef = useRef(0);
   const unifiedTestRunRef = useRef(0);
@@ -1656,6 +2181,48 @@ export function LoopStudio({
     [loop],
   );
   const findings = useMemo(() => (loop ? validateLoop(loop) : []), [loop]);
+  const runtimeMapAnchors = useMemo(() => {
+    const frontier = loop?.startingPackage.find(
+      (item) => item.role === "frontier",
+    );
+    return (frontier?.initialContents ?? []).map((title, index) => ({
+      id: `${frontier?.id ?? "project-area"}-${index + 1}`,
+      title,
+      summary: frontier?.description,
+      objective: loop?.objective,
+    }));
+  }, [loop]);
+  const runtimeRegions = useMemo(
+    () =>
+      buildRuntimeMap(runtimeSnapshot?.state ?? null, {
+        anchors: runtimeMapAnchors,
+        ledger: runtimeSnapshot?.ledger ?? [],
+        reviewedThrough:
+          runtimeSnapshot?.review?.lastReviewedLedger ?? 0,
+        activeRegionId: runtimeSnapshot?.presence?.regionId ?? null,
+        maximumRegions: 6,
+      }),
+    [
+      runtimeMapAnchors,
+      runtimeSnapshot?.ledger,
+      runtimeSnapshot?.presence?.regionId,
+      runtimeSnapshot?.review?.lastReviewedLedger,
+      runtimeSnapshot?.state,
+    ],
+  );
+  const selectedRuntimeRegion = useMemo(
+    () =>
+      runtimeRegions.find((region) => region.id === selectedRuntimeRegionId) ??
+      null,
+    [runtimeRegions, selectedRuntimeRegionId],
+  );
+  const runtimeLoopPhases = useMemo(
+    () =>
+      (sequence?.states ?? loop?.states ?? []).filter(
+        (state) => !["interrupt", "terminal"].includes(state.kind),
+      ),
+    [loop?.states, sequence?.states],
+  );
   const blockingFindings = findings.filter((item) => item.severity === "error");
   const isUnifiedTestRunning = ACTIVE_TEST_STAGES.includes(unifiedTestStage);
   const isRuntimeRunning = runtimeRun?.active === true;
@@ -2271,6 +2838,30 @@ export function LoopStudio({
     );
   const currentRuntimeIteration =
     runtimeRun?.currentIteration ?? runtimeIterations.length + 1;
+  const runtimeReviewedThrough =
+    runtimeSnapshot?.review?.lastReviewedLedger ?? 0;
+  const runtimeUnreviewedCount =
+    runtimeSnapshot?.ledger.filter(
+      (entry) => entry.number > runtimeReviewedThrough,
+    ).length ?? 0;
+  const visibleRuntimePresence: RuntimePresence | null =
+    runtimeSnapshot?.presence ??
+    (runtimeSnapshot?.state?.activeAssignment && isRuntimeRunning
+      ? {
+          actor: "worker",
+          status: "working",
+          assignmentId: runtimeSnapshot.state.activeAssignment.id,
+          assignmentTitle: runtimeSnapshot.state.activeAssignment.title,
+          regionId: runtimeSnapshot.state.activeAssignment.frontierId,
+          phaseId: runtimeLoopPhases[0]?.id ?? null,
+          phaseName: runtimeLoopPhases[0]?.name ?? "Working",
+          currentAction: runtimeActivity,
+          detail: runtimeActivityNote,
+          iterationNumber: currentRuntimeIteration,
+          source: "runtime",
+          updatedAt: new Date().toISOString(),
+        }
+      : null);
   const testPanelLabel = isUnifiedTestRunning
     ? TEST_STAGE_LABEL[unifiedTestStage]
     : testPassed
@@ -2862,6 +3453,16 @@ ${exactTraceFindings}`;
           if (event.type === "runtime_state") {
             setRuntimeSnapshot(event.snapshot as RuntimeSnapshot);
           }
+          if (event.type === "presence") {
+            setRuntimeSnapshot((current) =>
+              current
+                ? {
+                    ...current,
+                    presence: event.presence as RuntimePresence,
+                  }
+                : current,
+            );
+          }
           if (event.type === "error") {
             setRuntimeError(event.text);
           }
@@ -2897,6 +3498,32 @@ ${exactTraceFindings}`;
         error instanceof Error
           ? error.message
           : "Runtime policy could not be updated.",
+      );
+    }
+  };
+
+  const markRuntimeReviewed = async () => {
+    const through = runtimeSnapshot?.ledger.at(-1)?.number ?? 0;
+    if (!through) return;
+    setRuntimeError(null);
+    try {
+      const response = await fetch(`${DAEMON_URL}/api/runtime/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ through }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(
+          payload.error || "Runtime results could not be marked reviewed.",
+        );
+      }
+      setRuntimeSnapshot(payload as RuntimeSnapshot);
+    } catch (error) {
+      setRuntimeError(
+        error instanceof Error
+          ? error.message
+          : "Runtime results could not be marked reviewed.",
       );
     }
   };
@@ -4124,109 +4751,6 @@ ${exactTraceFindings}`;
           </header>
 
           <div className="runtime-workspace-grid">
-            <aside className="runtime-understanding">
-              <header>
-                <div>
-                  <span className="eyebrow">Understanding & steering</span>
-                  <h2>Ask the runtime</h2>
-                </div>
-                <span className={isRuntimeUnderstanding ? "is-active" : ""}>
-                  {isRuntimeUnderstanding ? "Reading state…" : "Read-only agent"}
-                </span>
-              </header>
-              <div className="runtime-understanding-thread">
-                {runtimeUnderstandingMessages.length === 0 ? (
-                  <div className="runtime-understanding-empty">
-                    <span aria-hidden="true">◎</span>
-                    <strong>Understand an overnight run quickly</strong>
-                    <p>
-                      Ask what changed, what worked, what failed, or why the
-                      next work was selected. Answers cite durable evidence.
-                    </p>
-                    <button
-                      onClick={() =>
-                        setRuntimeUnderstandingInput(
-                          "What is the current state, what changed recently, and what happens next?",
-                        )
-                      }
-                      type="button"
-                    >
-                      Summarize the runtime
-                    </button>
-                  </div>
-                ) : (
-                  runtimeUnderstandingMessages.map((message) => (
-                    <article
-                      className={`runtime-understanding-message is-${message.role}`}
-                      key={message.id}
-                    >
-                      <small>
-                        {message.role === "user"
-                          ? "You"
-                          : message.role === "agent"
-                            ? agent === "codex"
-                              ? "Codex"
-                              : "Claude"
-                            : message.role === "steering"
-                              ? "Steering queued"
-                              : "Error"}
-                      </small>
-                      <p>{message.text}</p>
-                    </article>
-                  ))
-                )}
-              </div>
-              <div className="runtime-composer">
-                <div className="runtime-composer-mode">
-                  <button
-                    className={runtimeComposerMode === "ask" ? "is-active" : ""}
-                    onClick={() => setRuntimeComposerMode("ask")}
-                    type="button"
-                  >
-                    Ask
-                  </button>
-                  <button
-                    className={
-                      runtimeComposerMode === "steer" ? "is-active" : ""
-                    }
-                    onClick={() => setRuntimeComposerMode("steer")}
-                    type="button"
-                  >
-                    Steer
-                  </button>
-                </div>
-                <textarea
-                  disabled={isRuntimeUnderstanding}
-                  onChange={(event) =>
-                    setRuntimeUnderstandingInput(event.target.value)
-                  }
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      void submitRuntimeComposer();
-                    }
-                  }}
-                  placeholder={
-                    runtimeComposerMode === "ask"
-                      ? "What changed in the last three iterations?"
-                      : "Prioritize accessibility before adding another feature."
-                  }
-                  rows={3}
-                  value={runtimeUnderstandingInput}
-                />
-                <button
-                  className="button-primary"
-                  disabled={
-                    !runtimeUnderstandingInput.trim() || isRuntimeUnderstanding
-                  }
-                  onClick={() => void submitRuntimeComposer()}
-                  type="button"
-                >
-                  {runtimeComposerMode === "ask" ? "Ask runtime" : "Queue steering"}
-                </button>
-              </div>
-            </aside>
-
             <section className="runtime-dashboard">
               <nav className="runtime-view-tabs" aria-label="Runtime views">
                 {(["now", "state", "frontier", "history"] as RuntimeView[]).map(
@@ -4238,7 +4762,7 @@ ${exactTraceFindings}`;
                       type="button"
                     >
                       {view === "now"
-                        ? "Now"
+                        ? "Map"
                         : view === "state"
                           ? "State"
                           : view === "frontier"
@@ -4252,125 +4776,161 @@ ${exactTraceFindings}`;
               <div className="runtime-view">
                 {runtimeView === "now" && (
                   <>
-                    <section className="runtime-now-hero">
-                      <div>
-                        <span
-                          className={`runtime-status-dot is-${runtimeSnapshot?.state?.status ?? "ready"}`}
-                        />
-                        <div>
-                          <small>Current objective</small>
-                          <h2>
-                            {runtimeSnapshot?.state?.direction.currentObjective ??
-                              "No current objective"}
-                          </h2>
-                        </div>
-                      </div>
-                      <span>
-                        State v{runtimeSnapshot?.state?.version ?? "—"} ·{" "}
-                        {runtimeSnapshot?.state?.status ?? "not initialized"}
-                      </span>
-                    </section>
+                    <RuntimeOperationsMap
+                      currentObjective={
+                        runtimeRegionLabel(
+                          runtimeSnapshot?.state?.direction.currentObjective ??
+                            "Select the next objective-backed assignment",
+                        )
+                      }
+                      isRunning={isRuntimeRunning}
+                      latestActivity={runtimeActivities.at(-1) ?? null}
+                      latestResult={runtimeSnapshot?.ledger.at(-1) ?? null}
+                      onClose={() => {
+                        setSelectedRuntimeRegionId(null);
+                        setIsRuntimeCommandOpen(false);
+                      }}
+                      onAsk={(region) => {
+                        setSelectedRuntimeRegionId(region.id);
+                        setRuntimeComposerMode("ask");
+                        setRuntimeUnderstandingInput(
+                          `What is happening in ${region.label}, what evidence supports its condition, and what should happen next?`,
+                        );
+                        setIsRuntimeCommandOpen(true);
+                      }}
+                      onInspect={() => setRuntimeView("frontier")}
+                      onReview={() => setRuntimeView("history")}
+                      onSelect={(id) => {
+                        setSelectedRuntimeRegionId((current) =>
+                          current === id ? null : id,
+                        );
+                        setIsRuntimeCommandOpen(false);
+                      }}
+                      onSteer={(region) => {
+                        setSelectedRuntimeRegionId(region.id);
+                        setRuntimeComposerMode("steer");
+                        setRuntimeUnderstandingInput(
+                          `Prioritize ${region.label}: `,
+                        );
+                        setIsRuntimeCommandOpen(true);
+                      }}
+                      onZoom={setRuntimeMapZoom}
+                      objective={
+                        runtimeSnapshot?.state?.direction.northStar ??
+                        loop?.objective ??
+                        "Advance the project"
+                      }
+                      phases={runtimeLoopPhases}
+                      presence={visibleRuntimePresence}
+                      regions={runtimeRegions}
+                      selectedRegion={selectedRuntimeRegion}
+                      unreviewedCount={runtimeUnreviewedCount}
+                      zoom={runtimeMapZoom}
+                    />
 
-                    <div className="runtime-now-grid">
-                      <section className="runtime-focus-card">
-                        <span className="eyebrow">Active assignment</span>
-                        {runtimeSnapshot?.state?.activeAssignment ? (
-                          <>
-                            <h3>
-                              {runtimeSnapshot.state.activeAssignment.title}
-                            </h3>
-                            <p>
-                              {runtimeSnapshot.state.activeAssignment.objective}
-                            </p>
-                            <dl>
-                              <div>
-                                <dt>Status</dt>
-                                <dd>
-                                  {runtimeSnapshot.state.activeAssignment.status}
-                                </dd>
-                              </div>
-                              <div>
-                                <dt>Report</dt>
-                                <dd>
-                                  {runtimeSnapshot.state.activeAssignment
-                                    .reportPath || "Pending"}
-                                </dd>
-                              </div>
-                            </dl>
-                          </>
-                        ) : (
-                          <>
-                            <h3>
-                              {isRuntimeRunning
-                                ? runtimeActivity
-                                : "No assignment is active"}
-                            </h3>
-                            <p>
-                              {isRuntimeRunning
-                                ? runtimeActivityNote
-                                : runtimeSnapshot?.state?.status === "completed"
-                                  ? "The objective has reached its completion policy."
-                                  : "Start the loop to lease the highest-priority ready work."}
-                            </p>
-                          </>
+                    {isRuntimeCommandOpen && selectedRuntimeRegion && (
+                      <section className="runtime-map-command-console">
+                        <header>
+                          <div>
+                            <small>
+                              {runtimeComposerMode === "ask"
+                                ? "Ask about"
+                                : "Direct work in"}
+                            </small>
+                            <strong>{selectedRuntimeRegion.label}</strong>
+                          </div>
+                          <button
+                            aria-label="Close command console"
+                            onClick={() => setIsRuntimeCommandOpen(false)}
+                            type="button"
+                          >
+                            ×
+                          </button>
+                        </header>
+
+                        {runtimeUnderstandingMessages.length > 0 && (
+                          <div className="runtime-map-command-history">
+                            {runtimeUnderstandingMessages.slice(-2).map((message) => (
+                              <article
+                                className={`is-${message.role}`}
+                                key={message.id}
+                              >
+                                <small>
+                                  {message.role === "user"
+                                    ? "You"
+                                    : message.role === "agent"
+                                      ? agent === "codex"
+                                        ? "Codex"
+                                        : "Claude"
+                                      : message.role === "steering"
+                                        ? "Direction queued"
+                                        : "Error"}
+                                </small>
+                                <p>{message.text}</p>
+                              </article>
+                            ))}
+                          </div>
                         )}
-                      </section>
 
-                      <section className="runtime-focus-card">
-                        <span className="eyebrow">Latest result</span>
-                        {runtimeSnapshot?.ledger.at(-1) ? (
-                          <>
-                            <h3>{runtimeSnapshot.ledger.at(-1)?.completed}</h3>
-                            <p>{runtimeSnapshot.ledger.at(-1)?.reason}</p>
-                            <dl>
-                              <div>
-                                <dt>Progress</dt>
-                                <dd>{runtimeSnapshot.ledger.at(-1)?.progress}</dd>
-                              </div>
-                              <div>
-                                <dt>Next</dt>
-                                <dd>{runtimeSnapshot.ledger.at(-1)?.next}</dd>
-                              </div>
-                            </dl>
-                          </>
-                        ) : (
-                          <>
-                            <h3>No integrated result yet</h3>
-                            <p>
-                              The first completed assignment will appear here
-                              with its evidence and state change.
-                            </p>
-                          </>
-                        )}
-                      </section>
-                    </div>
-
-                    <section className="runtime-live-card">
-                      <header>
-                        <div>
-                          <strong>
-                            {isRuntimeRunning
-                              ? "Live agent activity"
-                              : "Last run activity"}
-                          </strong>
-                          <span>
-                            {runtimeActivities.length} recorded events
-                          </span>
+                        <div className="runtime-composer-mode">
+                          <button
+                            className={
+                              runtimeComposerMode === "ask" ? "is-active" : ""
+                            }
+                            onClick={() => setRuntimeComposerMode("ask")}
+                            type="button"
+                          >
+                            Ask
+                          </button>
+                          <button
+                            className={
+                              runtimeComposerMode === "steer"
+                                ? "is-active"
+                                : ""
+                            }
+                            onClick={() => setRuntimeComposerMode("steer")}
+                            type="button"
+                          >
+                            Steer
+                          </button>
                         </div>
-                        {isRuntimeRunning && <i>Live</i>}
-                      </header>
-                      {runtimeActivities.length ? (
-                        <ActivityFeed
-                          entries={runtimeActivities}
-                          label="Runtime agent activity"
+                        <textarea
+                          autoFocus
+                          disabled={isRuntimeUnderstanding}
+                          onChange={(event) =>
+                            setRuntimeUnderstandingInput(event.target.value)
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" && !event.shiftKey) {
+                              event.preventDefault();
+                              void submitRuntimeComposer();
+                            }
+                          }}
+                          placeholder={
+                            runtimeComposerMode === "ask"
+                              ? "Ask what changed, what is blocked, or why this is next."
+                              : "Give a direction for this part of the project."
+                          }
+                          rows={3}
+                          value={runtimeUnderstandingInput}
                         />
-                      ) : (
-                        <p className="runtime-empty-copy">
-                          Start the loop to see file reads, edits, commands,
-                          tests, worker reports, and state integration.
-                        </p>
-                      )}
-                    </section>
+                        <button
+                          className="button-primary"
+                          disabled={
+                            !runtimeUnderstandingInput.trim() ||
+                            isRuntimeUnderstanding
+                          }
+                          onClick={() => void submitRuntimeComposer()}
+                          type="button"
+                        >
+                          {isRuntimeUnderstanding
+                            ? "Reading state…"
+                            : runtimeComposerMode === "ask"
+                              ? "Ask runtime"
+                              : "Queue direction"}
+                        </button>
+                      </section>
+                    )}
                   </>
                 )}
 
@@ -4506,6 +5066,30 @@ ${exactTraceFindings}`;
 
                 {runtimeView === "history" && (
                   <section className="runtime-ledger">
+                    {runtimeUnreviewedCount > 0 && (
+                      <aside className="runtime-review-banner">
+                        <div>
+                          <span>● Needs your review</span>
+                          <strong>
+                            {runtimeUnreviewedCount} finished{" "}
+                            {runtimeUnreviewedCount === 1
+                              ? "result is"
+                              : "results are"}{" "}
+                            new
+                          </strong>
+                          <small>
+                            Inspect the summaries and evidence below, then
+                            acknowledge them to clear the map badge.
+                          </small>
+                        </div>
+                        <button
+                          onClick={() => void markRuntimeReviewed()}
+                          type="button"
+                        >
+                          Mark all reviewed
+                        </button>
+                      </aside>
+                    )}
                     <header>
                       <div>
                         <span className="eyebrow">Durable trajectory</span>
@@ -4518,7 +5102,14 @@ ${exactTraceFindings}`;
                         {[...(runtimeSnapshot?.ledger ?? [])]
                           .reverse()
                           .map((entry) => (
-                            <li key={entry.id}>
+                            <li
+                              className={
+                                entry.number > runtimeReviewedThrough
+                                  ? "is-unreviewed"
+                                  : ""
+                              }
+                              key={entry.id}
+                            >
                               <span>{entry.number}</span>
                               <article>
                                 <header>

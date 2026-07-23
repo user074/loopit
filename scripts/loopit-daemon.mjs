@@ -94,6 +94,7 @@ const runtimeLedgerPath = path.join(runtimeDir, "LEDGER.md");
 const runtimeAssignmentsDir = path.join(runtimeDir, "assignments");
 const runtimeReportsDir = path.join(runtimeDir, "reports");
 const runtimeSteeringPath = path.join(runtimeDir, "STEERING.md");
+const runtimeReviewPath = path.join(runtimeDir, "REVIEW.md");
 const testReportPath = path.join(loopitDir, "test-report.md");
 const testOutputPath = path.join(loopitDir, ".test-agent-output.tmp");
 const port = Number(process.env.LOOPIT_DAEMON_PORT || 4318);
@@ -197,6 +198,48 @@ async function writeRuntimeLedger(entries) {
   await writeText(runtimeLedgerPath, serializeRuntimeLedger(entries));
 }
 
+async function readRuntimeReview() {
+  try {
+    const markdown = await readFile(runtimeReviewPath, "utf8");
+    return {
+      lastReviewedLedger:
+        Number(
+          markdown.match(/^last-reviewed-ledger:\s*(\d+)$/m)?.[1],
+        ) || 0,
+      reviewedAt:
+        markdown.match(/^reviewed-at:\s*(.+)$/m)?.[1]?.trim() || null,
+    };
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return { lastReviewedLedger: 0, reviewedAt: null };
+    }
+    throw error;
+  }
+}
+
+async function writeRuntimeReview(lastReviewedLedger) {
+  const review = {
+    lastReviewedLedger,
+    reviewedAt: new Date().toISOString(),
+  };
+  await writeText(
+    runtimeReviewPath,
+    `---
+loopit-runtime-review: 1
+last-reviewed-ledger: ${review.lastReviewedLedger}
+reviewed-at: ${review.reviewedAt}
+---
+
+# Runtime review state
+
+The web control plane has acknowledged runtime results through ledger entry
+${review.lastReviewedLedger}. Detailed evidence remains in the append-only
+ledger and iteration reports.
+`,
+  );
+  return review;
+}
+
 function parseSteeringMarkdown(markdown) {
   const directives = [];
   const pattern =
@@ -252,15 +295,19 @@ async function writeRuntimeSteering(directives) {
 
 async function runtimeSnapshot(loop = null) {
   const state = await readRuntimeStateOrNull();
-  const [ledger, steering] = await Promise.all([
+  const [ledger, steering, review] = await Promise.all([
     readRuntimeLedger(),
     readRuntimeSteering(),
+    readRuntimeReview(),
   ]);
   return {
     state,
     ledger,
     steering,
+    review,
     loopRevision: loop?.revision ?? state?.loopRevision ?? null,
+    presence:
+      activeRun?.purpose === "runtime" ? activeRun.presence ?? null : null,
   };
 }
 
@@ -835,6 +882,11 @@ Read:
 Execute only that assignment against the target project. Follow the profession-specific workflow, produce or update the declared native deliverables, and collect observable evidence. Use the existing repository conventions and safe local tools. A partial, failed, or blocked attempt is still useful when its evidence is recorded honestly.
 
 Loopit—not this worker—owns integration. Do not edit any file under .loopit/, do not select a different frontier item, and do not declare the overall loop complete. If the assignment becomes blocked, investigate safe alternatives inside the declared authority before reporting the blocker. Never invent credentials, private facts, evidence, or permission, and never bypass an external safeguard.
+
+When you begin a declared loop phase or materially change what you are doing, send one short progress update on its own line:
+LOOPIT_PHASE: <exact state ID from .loopit/loop.md> | <plain-language current action>
+
+Use the exact existing state ID. This is an operational location marker only; it does not change durable state or replace evidence. Continue working immediately after the update.
 
 End with a detailed Markdown report using these headings:
 # Iteration report
@@ -2119,6 +2171,7 @@ async function streamRuntime(request, response) {
     iterations: [],
     summary: "",
     activities: [],
+    presence: null,
   };
   await writeRun(run);
 
@@ -2145,6 +2198,7 @@ async function streamRuntime(request, response) {
     iterations: run.iterations,
     summary: run.summary,
     activities: run.activities,
+    presence: run.presence,
   });
 
   activeRun = {
@@ -2153,9 +2207,82 @@ async function streamRuntime(request, response) {
     purpose: "runtime",
     runId: run.id,
     activities: run.activities,
+    presence: null,
     stopRequested: false,
   };
   send({ type: "run_started", run: publicRun(true) });
+
+  const loopPhases = loop.states.filter(
+    (state) => !["interrupt", "terminal"].includes(state.kind),
+  );
+  const firstPhase = loopPhases[0] ?? loop.states[0] ?? null;
+  const phaseForKinds = (kinds) =>
+    loopPhases.find((state) => kinds.includes(state.kind)) ?? null;
+
+  const updatePresence = (patch) => {
+    const current = run.presence ?? {};
+    const next = {
+      ...current,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    };
+    run.presence = next;
+    if (activeRun?.runId === run.id) activeRun.presence = next;
+    send({ type: "presence", presence: next });
+  };
+
+  const phaseCheckIn = (value) => {
+    const match = String(value ?? "").match(
+      /(?:^|\n)LOOPIT_PHASE:\s*([a-z0-9][a-z0-9-]*)\s*\|\s*([^\n]+)/i,
+    );
+    if (!match) return false;
+    const phase = loop.states.find((state) => state.id === match[1]);
+    if (!phase) return false;
+    updatePresence({
+      actor: "worker",
+      status: "working",
+      phaseId: phase.id,
+      phaseName: phase.name,
+      currentAction: activityDetail(match[2], 180),
+      source: "worker",
+    });
+    return true;
+  };
+
+  const inferPresenceFromActivity = (activity, actor) => {
+    if (!run.presence || actor !== "worker") return;
+    const target =
+      activity.kind === "write"
+        ? phaseForKinds(["act"])
+        : activity.kind === "command"
+          ? phaseForKinds(["evaluate"])
+          : ["plan", "reasoning", "read", "search"].includes(activity.kind)
+            ? phaseForKinds(["observe", "decide"])
+            : activity.kind === "message"
+              ? phaseForKinds(["challenge", "update"])
+              : null;
+    const currentIndex = loopPhases.findIndex(
+      (state) => state.id === run.presence?.phaseId,
+    );
+    const targetIndex = loopPhases.findIndex(
+      (state) => state.id === target?.id,
+    );
+    const phase =
+      target && targetIndex >= Math.max(0, currentIndex)
+        ? target
+        : loop.states.find((state) => state.id === run.presence?.phaseId) ??
+          firstPhase;
+    updatePresence({
+      actor: "worker",
+      status: activity.status === "error" ? "problem" : "working",
+      phaseId: phase?.id ?? null,
+      phaseName: phase?.name ?? "Working",
+      currentAction: activity.text,
+      detail: activity.detail ?? null,
+      lastActivityKind: activity.kind,
+      source: "inferred",
+    });
+  };
 
   const publishActivity = (activity) => {
     const entry = {
@@ -2176,6 +2303,7 @@ async function streamRuntime(request, response) {
       run.activities[existingIndex] = entry;
     }
     send({ type: "activity", ...entry });
+    inferPresenceFromActivity(entry, run.presence?.actor);
   };
   publishActivity({
     text: "Starting continuous runtime",
@@ -2191,6 +2319,20 @@ async function streamRuntime(request, response) {
   }) => {
     const startedAt = new Date().toISOString();
     run.currentIteration = iterationNumber;
+    if (phase === "integration") {
+      const integrationPhase =
+        phaseForKinds(["update", "challenge"]) ??
+        loopPhases.at(-1) ??
+        firstPhase;
+      updatePresence({
+        actor: "supervisor",
+        status: "integrating",
+        phaseId: integrationPhase?.id ?? null,
+        phaseName: integrationPhase?.name ?? "Integrating result",
+        currentAction: "Auditing evidence and updating durable state",
+        source: "runtime",
+      });
+    }
     publishActivity({
       text:
         phase === "worker"
@@ -2267,6 +2409,7 @@ async function streamRuntime(request, response) {
             event.item?.type === "agent_message"
           ) {
             finalSummary = event.item.text;
+            if (!structured) phaseCheckIn(event.item.text);
             if (structured) structuredResult = event.item.text;
             else send({ type: "agent_message", text: finalSummary });
           }
@@ -2290,6 +2433,11 @@ async function streamRuntime(request, response) {
           claudeToolUses,
         )) {
           publishWorkerActivity(progress);
+        }
+        if (event.type === "assistant" && !structured) {
+          for (const block of event.message?.content ?? []) {
+            if (block.type === "text") phaseCheckIn(block.text);
+          }
         }
         if (event.type === "result") {
           if (structured) {
@@ -2360,7 +2508,9 @@ async function streamRuntime(request, response) {
         state: runtimeState,
         ledger,
         steering: await readRuntimeSteering(),
+        review: await readRuntimeReview(),
         loopRevision: loop.revision,
+        presence: run.presence,
       },
     });
   };
@@ -2509,6 +2659,29 @@ Determined by the runtime supervisor.
         );
       }
       await Promise.all(durableWrites);
+      const assignmentPhase =
+        assignment.status === "result-ready"
+          ? phaseForKinds(["update", "challenge"]) ??
+            loopPhases.at(-1) ??
+            firstPhase
+          : firstPhase;
+      updatePresence({
+        actor:
+          assignment.status === "result-ready" ? "supervisor" : "worker",
+        status:
+          assignment.status === "result-ready" ? "integrating" : "working",
+        assignmentId: assignment.id,
+        assignmentTitle: assignment.title,
+        regionId: assignment.frontierId,
+        phaseId: assignmentPhase?.id ?? null,
+        phaseName: assignmentPhase?.name ?? "Starting work",
+        currentAction:
+          assignment.status === "result-ready"
+            ? "Preparing the saved result for integration"
+            : assignment.title,
+        iterationNumber,
+        source: "runtime",
+      });
       await stateEvent();
       publishActivity({
         text:
@@ -2683,6 +2856,32 @@ Determined by the runtime supervisor.
         progress: integration.progress,
       });
       completedThisRun += 1;
+      const nextRegion = [...runtimeState.frontier]
+        .filter((item) => item.status === "ready")
+        .sort((left, right) => right.priority - left.priority)[0];
+      updatePresence({
+        actor: "supervisor",
+        status:
+          handoff.outcome === "continue"
+            ? "moving"
+            : handoff.outcome === "complete"
+              ? "completed"
+              : "paused",
+        regionId: nextRegion?.id ?? assignment.frontierId,
+        phaseId:
+          handoff.outcome === "continue" ? firstPhase?.id ?? null : null,
+        phaseName:
+          handoff.outcome === "continue"
+            ? firstPhase?.name ?? "Select next work"
+            : handoff.outcome === "complete"
+              ? "Objective accepted"
+              : "Waiting at boundary",
+        currentAction:
+          handoff.outcome === "continue"
+            ? `Moving to ${handoff.next}`
+            : handoff.next,
+        source: "runtime",
+      });
       publishActivity({
         text: `Loop iteration ${iterationNumber} completed`,
         detail: `${handoff.completed} · state v${runtimeState.version}`,
@@ -2867,7 +3066,9 @@ const server = http.createServer(async (request, response) => {
           state: null,
           ledger: [],
           steering: [],
+          review: { lastReviewedLedger: 0, reviewedAt: null },
           loopRevision: null,
+          presence: null,
         });
         return;
       }
@@ -2877,11 +3078,40 @@ const server = http.createServer(async (request, response) => {
           state: null,
           ledger: [],
           steering: [],
+          review: { lastReviewedLedger: 0, reviewedAt: null },
           loopRevision: null,
+          presence: null,
         });
         return;
       }
       await ensureRuntimeState(loop);
+      json(response, 200, await runtimeSnapshot(loop));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/runtime/review") {
+      if (!runtimeAllowed) {
+        json(response, 409, {
+          error: "Runtime review can only target a separate project.",
+        });
+        return;
+      }
+      const loop = await readLoopOrNull();
+      if (!loop) {
+        json(response, 400, {
+          error: "Construct a loop before reviewing runtime results.",
+        });
+        return;
+      }
+      const body = await readBody(request);
+      const ledger = await readRuntimeLedger();
+      const latest = ledger.at(-1)?.number ?? 0;
+      const requested = Number(body.through);
+      const through =
+        Number.isInteger(requested) && requested >= 0
+          ? Math.min(requested, latest)
+          : latest;
+      await writeRuntimeReview(through);
       json(response, 200, await runtimeSnapshot(loop));
       return;
     }

@@ -16,6 +16,7 @@ The current implementation establishes the control-plane spine described below:
 - Detailed worker reports under `.loopit/runtime/reports/`.
 - An append-only trajectory at `.loopit/runtime/LEDGER.md`.
 - Durable human directions at `.loopit/runtime/STEERING.md`.
+- A durable human review cursor at `.loopit/runtime/REVIEW.md`.
 - One sequential runtime supervisor and one fresh bounded worker per iteration.
 - A fresh read-only, schema-constrained integration turn after every worker
   report. Workers cannot edit `.loopit/` or decide continuation.
@@ -24,9 +25,12 @@ The current implementation establishes the control-plane spine described below:
 - Guided and time-bounded unattended autonomy modes.
 - Empty-frontier reassessment when unattended mode or new steering requires the
   runtime to generate justified next work.
-- Live operational events plus **Now**, **State**, **Next work**, and **History**
+- A domain-neutral operations map plus **State**, **Next work**, and **History**
   views.
-- A separate read-only understanding agent and queued steering UI.
+- Live worker and supervisor presence mapped to the project area and declared
+  loop phase they are advancing.
+- A contextual read-only understanding agent and queued steering UI attached to
+  the selected project area.
 - Recovery checkpoints for interrupted assignments and reports awaiting
   integration.
 
@@ -522,7 +526,9 @@ Loopit should have two top-level modes:
 Design | Runtime
 ```
 
-The Runtime workspace keeps the product's two-panel simplicity.
+The Runtime workspace uses one integrated command map. Work, workers, and
+commands are not separate panels: selecting an area reveals its evidence and
+places understanding and steering controls beside it.
 
 ### Persistent runtime header
 
@@ -533,15 +539,7 @@ The Runtime workspace keeps the product's two-panel simplicity.
 - Remaining time or budget.
 - Pause, resume, stop, and run-unattended controls.
 
-### Left: understand and steer
-
-- Interactive understanding-agent conversation.
-- "Since your last visit" queries.
-- Evidence-backed answers with report links.
-- Generated interactive HTML views.
-- Steering requests and visible application status.
-
-### Right: visible control state
+### Project command map
 
 The default view should answer without extra navigation:
 
@@ -553,10 +551,62 @@ The default view should answer without extra navigation:
 6. What happens next?
 7. Does anything need the human?
 
+The map derives stable regions from the user-approved starting frontier, then
+rolls evolving state, lower-level frontier items, assignments, and ledger
+results into those regions. It preserves the project's vocabulary rather than
+naming every region "work": research may show hypotheses, experiments, or
+claims; software may show features, defects, or migrations; UI/UX may show
+flows, screens, or design questions; business may show opportunities,
+decisions, or accounts. The abstraction is the relationship—not the label:
+
+```text
+project area ↔ frontier item ↔ bounded assignment ↔ evidence-backed state
+```
+
+The current worker or supervisor is rendered as a unit inside the affected
+area and emphasized again in one central mission card. Its presence includes
+the assignment, iteration, current declared loop phase, current action, and
+last activity. A worker can emit
+`LOOPIT_PHASE: <state-id> | <current action>`; visible tool activity provides a
+conservative phase fallback when no explicit check-in arrives.
+
+Each area shows an actual progress bar:
+
+```text
+resolved tracked units / (resolved tracked units + open tracked units)
+```
+
+Resolved units come from integrated advancing or learning results and retired
+frontier items. Open units come from ready, active, or waiting frontier items.
+The exact numerator and denominator are shown beside the percentage. The
+denominator may grow when evidence reveals justified new work, so this is an
+inspectable view of the current known plan rather than a fabricated estimate of
+distance to an unknowable objective.
+
+Completed ledger results remain highlighted as **not reviewed by you** until
+the person explicitly acknowledges them in History. The durable review cursor
+lives in `.loopit/runtime/REVIEW.md`; it does not modify the append-only ledger
+or imply acceptance of the underlying result.
+
+The map has three semantic detail levels. **Overview** shows progress and
+condition, **Trajectory** reveals the area's past integrated result, current
+activity, and next declared work, and **Evidence** adds tracked evidence,
+uncertainty, and problem counts. These levels change the information shown
+rather than geometrically scaling the same card.
+
+Selecting a region opens a closable dock in normal page flow rather than an
+overlay. The dock keeps the rest of the map visible and exposes Past → Current
+→ Next, objective link, progress, and retirement condition. **Ask**, **Steer**,
+and **Inspect** originate there, so a control action retains the area it refers
+to. The Ask agent remains read-only. Steering remains a durable input applied
+at the next safe integration point. While an actor is present, its affected
+area carries a high-contrast live badge and glow; inactive areas recede without
+disappearing.
+
 Secondary views can expose:
 
-- **Now** — active assignment, live operational transcript, heartbeat, and
-  expected result.
+- **Map** — project regions, live agent presence, loop position, current action,
+  condition, evidence, and latest state change.
 - **State** — direction, artifact state, understanding state, gaps, and policy.
 - **Frontier** — ranked next work and waiting decisions.
 - **History** — ledger and iteration reports.
